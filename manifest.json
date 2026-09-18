@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "id": "akoshodi.fplradar",
+  "name": "FPL Radar",
+  "version": "0.2.0",
+  "author": "akoshodi",
+  "description": "Live Fantasy Premier League points, deadline countdown, price alerts, squad news, and top-manager-based transfer/captain suggestions.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "src/BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "FPL Radar",
+    "description": "Live FPL gameweek points, deadline countdown, squad news, and chip tracker.",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "entryId": null,
+      "leagueId": 314,
+      "topManagerSampleSize": 50
+    },
+    "schema": [
+      {
+        "key": "entryId",
+        "type": "integer",
+        "label": "FPL Team ID",
+        "description": "Found in the URL when viewing your team: fantasy.premierleague.com/entry/<ID>/..."
+      },
+      {
+        "key": "leagueId",
+        "type": "integer",
+        "label": "League ID for top-manager analysis",
+        "description": "Defaults to 314 (global Overall league). Point at a mini-league to benchmark against your own group.",
+        "defaultValue": 314
+      },
+      {
+        "key": "topManagerSampleSize",
+        "type": "integer",
+        "label": "Top-manager sample size",
+        "description": "How many top managers to sample (Phase 4). Capped at 200 to avoid hammering the FPL API.",
+        "min": 1,
+        "max": 200,
+        "defaultValue": 50
+      }
+    ]
+  }
+}
