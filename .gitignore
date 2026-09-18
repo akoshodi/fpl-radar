@@ -1,0 +1,11 @@
+# Local cache/data files the plugin writes at runtime
+*.cache.json
+data/
+
+# Editor cruft
+.vscode/
+.idea/
+*.swp
+
+# OS cruft
+.DS_Store
