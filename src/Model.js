@@ -9,8 +9,9 @@
 //
 // Phase 1 scope (docs/ROADMAP.md): deadline countdown (local calc,
 // no network per tick) + live gameweek points for the user's own team.
-// Later phases fill in squadNews (P2), priceWatch (P3), and
-// refreshTopManagerAnalysis (P4) — those remain stubs below.
+// Phase 2 (done): squad-news flags + chip tracker for the panel.
+// Later phases fill in priceWatch (P3) and refreshTopManagerAnalysis
+// (P4) — those remain stubs below.
 //
 // QML reactivity note: QML bindings to library functions are evaluated
 // once and do NOT re-run on their own. BarWidget.qml owns a cheap 1s
@@ -28,7 +29,8 @@ var state = {
     cache: {
         bootstrapStatic: null,  // { data, fetchedAt }
         fixtures: null,         // { data, fetchedAt }
-        entry: null,            // { data, fetchedAt } — entry/{id}/ summary
+        entry: null,            // { data, fetchedAt, entryId } — entry/{id}/ summary
+        entryHistory: null,     // { data, fetchedAt, entryId } — entry/{id}/history/ (chip usage)
         ownPicks: null,         // { data, fetchedAt, gameweek, entryId }
         liveEvent: null,        // { data, fetchedAt, gameweek }
         topManagerAnalysis: null // { data, fetchedAt, gameweek, sampleSize }
@@ -42,6 +44,7 @@ var TTL_MS = {
     bootstrapStatic: 6 * 3600 * 1000,  // 6 hours
     fixtures: 6 * 3600 * 1000,         // 6 hours
     entry: 3600 * 1000,                // 1 hour
+    entryHistory: 3600 * 1000,         // 1 hour (chip tracker)
     ownPicks: 3600 * 1000,             // 1 hour for own team
     liveEvent: 60 * 1000               // 60s, only polled while a GW is live
 }
@@ -113,6 +116,7 @@ function setEntryId(entryId) {
     state.cache.ownPicks = null
     state.cache.liveEvent = null
     state.cache.entry = null
+    state.cache.entryHistory = null
     persist()
 }
 
@@ -334,23 +338,156 @@ function ownGwPoints() {
     return _picksFallbackPoints()
 }
 
-// ---- Panel getters (Phase 2/3 — stubs until their phases) ----
+// ---- Panel getters: Squad news (Phase 2) ----
 
-function squadNews() {
-    // TODO(agent Phase 2): filter bootstrap-static elements to the user's
-    // own picks, map status/news fields. See docs/DATA_SOURCES.md.
-    return []
+// FPL status codes on bootstrap-static elements (see DATA_SOURCES.md).
+var STATUS_LABELS = {
+    a: "Available",
+    i: "Injured",
+    d: "Doubtful",
+    s: "Suspended",
+    u: "Unavailable"
 }
+
+// Flag-worthy statuses; "a" (available) rows never surface.
+function _isFlagStatus(status) {
+    return status === "i" || status === "d" || status === "s" || status === "u"
+}
+
+// Pure: build squad-news rows from raw bootstrap-static + raw picks.
+// Each row: { playerName, status, statusLabel, note, chanceOfPlaying,
+//   isCaptain, isViceCaptain, onBench }.
+function computeSquadNews(bootstrapData, picksData) {
+    if (!bootstrapData || !picksData || !picksData.picks) return []
+    var elements = bootstrapData.elements || []
+    var byId = {}
+    for (var i = 0; i < elements.length; i++) {
+        if (elements[i] && elements[i].id !== undefined) byId[elements[i].id] = elements[i]
+    }
+    var rows = []
+    for (var j = 0; j < picksData.picks.length; j++) {
+        var pick = picksData.picks[j]
+        var el = byId[pick.element]
+        if (!el) continue
+        var news = (el.news || "").replace(/^\s+|\s+$/g, "")
+        var flagged = _isFlagStatus(el.status)
+        if (!flagged && news === "") continue
+        rows.push({
+            playerName: el.web_name || ("#" + pick.element),
+            status: el.status || "",
+            statusLabel: STATUS_LABELS[el.status] || (el.status || "Unknown"),
+            note: news !== "" ? news : (STATUS_LABELS[el.status] || "Status changed"),
+            chanceOfPlaying: (el.chance_of_playing_this_round !== null &&
+                el.chance_of_playing_this_round !== undefined)
+                ? el.chance_of_playing_this_round : null,
+            isCaptain: !!pick.is_captain,
+            isViceCaptain: !!pick.is_vice_captain,
+            onBench: !(Number(pick.multiplier || 0) > 0)
+        })
+    }
+    // Most severe first: suspended/unavailable, injured, doubtful — then
+    // captains within the same band so the scary rows read first.
+    var severity = { s: 0, u: 0, i: 1, d: 2 }
+    rows.sort(function (a, b) {
+        var sa = severity[a.status] !== undefined ? severity[a.status] : 3
+        var sb = severity[b.status] !== undefined ? severity[b.status] : 3
+        if (sa !== sb) return sa - sb
+        if (a.isCaptain !== b.isCaptain) return a.isCaptain ? -1 : 1
+        if (a.isViceCaptain !== b.isViceCaptain) return a.isViceCaptain ? -1 : 1
+        return 0
+    })
+    return rows
+}
+
+// Panel-facing getter: cached data only, never fetches. Empty array means
+// "no flags" when we have both caches, "no data yet" otherwise — the panel
+// tells those apart via squadNewsState().
+function squadNews() {
+    var bs = state.cache.bootstrapStatic
+    var op = state.cache.ownPicks
+    if (!bs || !bs.data || !op || !op.data) return []
+    return computeSquadNews(bs.data, op.data)
+}
+
+// "ready" (both caches present — empty list genuinely means all clear),
+// "need-id" (no Team ID configured), or "loading" (waiting on fetches).
+function squadNewsState() {
+    if (!state.settings.entryId) return "need-id"
+    if (!state.cache.bootstrapStatic || !state.cache.bootstrapStatic.data) return "loading"
+    if (!state.cache.ownPicks || !state.cache.ownPicks.data) return "loading"
+    return "ready"
+}
+
+// ---- Panel getters: Chip tracker (Phase 2) ----
+
+// Canonical chip names as the FPL API spells them in history.chips.
+var ALL_CHIPS = ["wildcard", "freehit", "bboost", "3xc"]
+
+// Friendly labels for the panel.
+var CHIP_LABELS = {
+    wildcard: "Wildcard",
+    freehit: "Free Hit",
+    bboost: "Bench Boost",
+    "3xc": "Triple Captain"
+}
+
+// Pure: derive chip rows from raw /entry/{id}/history/ data.
+// Each row: { name, chip, used, usedEvent } — always all four chips,
+// ordered Wildcard / Free Hit / Bench Boost / Triple Captain. Unknown
+// entries in the payload are ignored so an API shape change degrades to
+// "available" rather than crashing.
+function computeChipStatus(historyData) {
+    var usedByChip = {}
+    var chips = (historyData && historyData.chips) || []
+    for (var i = 0; i < chips.length; i++) {
+        var c = chips[i]
+        if (!c || !c.name) continue
+        if (ALL_CHIPS.indexOf(c.name) === -1) continue
+        // Keep the earliest event if a chip somehow appears twice.
+        if (usedByChip[c.name] === undefined) usedByChip[c.name] = c.event !== undefined ? c.event : null
+    }
+    var rows = []
+    for (var j = 0; j < ALL_CHIPS.length; j++) {
+        var chip = ALL_CHIPS[j]
+        rows.push({
+            name: CHIP_LABELS[chip],
+            chip: chip,
+            used: usedByChip[chip] !== undefined,
+            usedEvent: usedByChip[chip] !== undefined ? usedByChip[chip] : null
+        })
+    }
+    return rows
+}
+
+function chipStatus() {
+    var eh = state.cache.entryHistory
+    if (!eh || !eh.data) return []
+    return computeChipStatus(eh.data)
+}
+
+function chipState() {
+    if (!state.settings.entryId) return "need-id"
+    if (!state.cache.entryHistory || !state.cache.entryHistory.data) return "loading"
+    return "ready"
+}
+
+function chipSummaryText() {
+    var rows = chipStatus()
+    if (chipState() !== "ready") return ""
+    var left = []
+    for (var i = 0; i < rows.length; i++) {
+        if (!rows[i].used) left.push(rows[i].name)
+    }
+    if (left.length === 0) return "All chips used"
+    return left.length + " chips left: " + left.join(", ")
+}
+
+// ---- Panel getters (Phase 3 — stub until its phase) ----
 
 function priceWatch() {
     // TODO(agent Phase 3): compare today's vs yesterday's cached
     // bootstrap-static now_cost/transfer deltas.
     // See docs/DATA_SOURCES.md#derived-data.
-    return []
-}
-
-function chipStatus() {
-    // TODO(agent Phase 2): derive from entry/{id}/ chip history.
     return []
 }
 
@@ -376,6 +513,14 @@ function needsOwnPicksRefresh() {
     return !_isFresh(op, TTL_MS.ownPicks)
 }
 
+function needsEntryHistoryRefresh() {
+    if (!state.settings.entryId) return false
+    var eh = state.cache.entryHistory
+    if (!eh || !eh.data) return true
+    if (eh.entryId !== state.settings.entryId) return true
+    return !_isFresh(eh, TTL_MS.entryHistory)
+}
+
 function needsLiveRefresh() {
     if (!isInLiveWindow()) return false
     if (!state.settings.entryId) return false
@@ -390,6 +535,7 @@ function refreshAll() {
     refreshBootstrapIfDue()
     refreshOwnPicksIfDue()
     refreshLiveIfDue()
+    refreshEntryHistoryIfDue()
 }
 
 function refreshBootstrapIfDue() {
@@ -459,6 +605,29 @@ function refreshLiveIfDue() {
             },
             function (err) {
                 state.lastError = String(err)
+                persist()
+            }
+        )
+    } catch (e) {
+        state.lastError = String(e)
+    }
+}
+
+function refreshEntryHistoryIfDue() {
+    if (!needsEntryHistoryRefresh()) return
+    var entryId = state.settings.entryId
+    try {
+        Api.fetchEntryHistory(
+            entryId,
+            function (data) {
+                state.cache.entryHistory = { data: data, fetchedAt: _now(), entryId: entryId }
+                state.lastError = null
+                persist()
+            },
+            function (err) {
+                state.lastError = String(err)
+                // Offline degrade: keep old chip list (or empty on first
+                // run) so the panel shows stale rows, never blanks.
                 persist()
             }
         )
