@@ -1,18 +1,65 @@
-import QtQuick 2.15
+import QtQuick
+import Quickshell
+import qs.Commons
+import qs.Ui
 import "Model.js" as Model
 
-// Always-visible bar widget. Keeps the Phase-1 contract: no network calls
-// here, only bindings to Model.js cached state plus two local Timers
-// (a 1s tick that just re-evaluates text bindings, and a 60s nudge that
-// asks Model.js to refresh IF due — Model.js no-ops outside the live
-// window / fresh TTLs, so this costs nothing most of the time).
-Row {
+// Always-visible bar widget: live points + deadline countdown.
+// Keeps the Phase-1 contract (no network calls here — only bindings to
+// Model.js cached state plus two local Timers): a 1s tick that just
+// re-evaluates text bindings, and a 60s nudge that asks Model.js to
+// refresh IF due (Model.js no-ops outside the live window / fresh TTLs,
+// so this costs nothing most of the time).
+BarWidget {
     id: root
-    spacing: 8
+    moduleName: "akoshodi.fplradar"
 
     // Incremented every second; passed to Model getters purely to force
     // binding re-evaluation (the value never affects results).
     property int tick: 0
+
+    // What the bar pill shows. Reads live Model state so the pill tracks
+    // points/deadline without reopening anything.
+    readonly property string pillText: Model.liveSummaryText(tick) + "  •  " + Model.deadlineText(tick)
+    readonly property bool pillLive: Model.isLive(tick)
+
+    function refresh() {
+        Model.refreshAll()
+        tick++
+    }
+
+    function togglePanel() {
+        if (panelLoader.item && panelLoader.item.toggle) panelLoader.item.toggle()
+    }
+
+    // Shape contract for shell.summon/hide/toggle routing
+    // (Bar.findPanelWidget requires open/close/opened on the root).
+    readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
+    function open() {
+        if (panelLoader.item && panelLoader.item.open) panelLoader.item.open()
+    }
+    function close() {
+        if (panelLoader.item && panelLoader.item.close) panelLoader.item.close()
+    }
+    readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
+    function closeForPopoutSwitch() {
+        if (panelLoader.item) panelLoader.item.closeForPopoutSwitch()
+    }
+
+    function injectPanel() {
+        var target = panelLoader.item
+        if (!target) return
+        if ("bar" in target) target.bar = root.bar
+        if ("settings" in target) target.settings = root.settings
+        if ("anchorItem" in target) target.anchorItem = button
+        if ("hostWidget" in target) target.hostWidget = root
+    }
+
+    implicitWidth: button.implicitWidth
+    implicitHeight: button.implicitHeight
+
+    onBarChanged: injectPanel()
+    onSettingsChanged: injectPanel()
 
     Component.onCompleted: {
         Model.init()
@@ -35,20 +82,27 @@ Row {
         onTriggered: Model.refreshAll()
     }
 
-    Text {
-        // e.g. "GW7 Live: 62 pts" — green while live, grey otherwise.
-        text: Model.liveSummaryText(root.tick)
-        color: Model.isLive(root.tick) ? "#2ecc71" : "#cccccc"
+    Loader {
+        id: panelLoader
+        active: true
+        source: Qt.resolvedUrl("Panel.qml")
+        visible: false
+        onLoaded: {
+            root.injectPanel()
+            Qt.callLater(root.injectPanel)
+        }
     }
 
-    Text {
-        // e.g. "Deadline: 1h 42m" — turns amber/red as it closes in.
-        text: Model.deadlineText(root.tick)
-        color: Model.deadlineColor(root.tick)
-    }
-
-    MouseArea {
+    WidgetButton {
+        id: button
         anchors.fill: parent
-        onClicked: Model.togglePanel()
+        bar: root.bar
+        text: root.pillText
+        active: root.pillLive
+        tooltipText: Model.deadlineText(root.tick)
+        onPressed: function (b) {
+            if (b === Qt.MiddleButton) root.refresh()
+            else root.togglePanel()
+        }
     }
 }
