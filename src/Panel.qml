@@ -4,11 +4,14 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Expanded panel: settings, squad news, chips, price watch, top-manager
-// insights. Renders only what Model.js hands it — no aggregation logic,
-// no network calls here. Sections that depend on not-yet-implemented
-// phases show an explicit "coming in Phase N" placeholder instead of a
-// blank gap (graceful degrade by construction).
+// FPL Radar panel: tabbed views (Team / Prices / Insights) plus a dedicated
+// Settings page behind the gear button. Renders only what Model.js hands
+// it — no aggregation logic, no network calls here.
+//
+// Reactivity note: QML evaluates a binding ONCE unless it references a
+// changing property. Every Model.*() call below takes root.tick so all
+// sections re-evaluate each second while open (the argument is ignored by
+// the getters). Without it, sections freeze in their at-open state.
 Panel {
     id: root
     moduleName: "akoshodi.fplradar"
@@ -19,15 +22,17 @@ Panel {
     property var hostWidget: null
     readonly property var barIdentity: hostWidget || root
 
+    // Visible view: team | prices | insights | settings.
+    property string view: "team"
+
     // Theme, guarded so the panel renders before the bar is injected.
     readonly property color contentForeground: bar ? bar.foreground : Color.foreground
     readonly property color dimForeground: bar ? Qt.darker(bar.foreground, 1.55) : Qt.darker(Color.foreground, 1.55)
     readonly property color urgentColor: bar ? bar.urgent : Color.urgent
     readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
 
-    // Force re-evaluation of Model getters while the panel sits open
-    // (countdown text, freshly arrived fetches). Model.refreshAll() only
-    // fetches when a TTL is stale, so this stays cheap.
+    // Ticks all Model bindings below (see note above). Model.refreshAll()
+    // only fetches when a TTL is stale, so this stays cheap.
     property int tick: 0
     Timer {
         interval: 1000
@@ -100,11 +105,6 @@ Panel {
     }
     onSettingsChanged: syncSettingsFromHost()
 
-    // Panel content lives in the canonical popup window (KeyboardPanel).
-    // The base Panel only owns open/close state — it renders no window
-    // itself, so a bare Column child would never become visible (and the
-    // bar-pill click would silently no-op). This mirrors the clock/monitor
-    // pattern: KeyboardPanel + PanelKeyCatcher + Flickable + Column.
     KeyboardPanel {
         id: panel
         anchorItem: root.anchorItem
@@ -137,31 +137,395 @@ Panel {
                     width: contentScroll.width
                     spacing: Style.space(14)
 
-        // --- Header: live summary + freshness ---
-        Column {
-            spacing: Style.space(4)
-                    width: parent.width
-            Text {
-                textFormat: Text.PlainText
-                text: Model.liveSummaryText(root.tick)
-                color: root.contentForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.title
-                font.bold: true
+        // --- Tab bar: always visible, doubles as the way back from Settings ---
+        Row {
+            spacing: Style.space(8)
+            Button {
+                text: "Team"
+                selected: root.view === "team"
+                onClicked: root.view = "team"
             }
-            Text {
-                textFormat: Text.PlainText
-                text: Model.deadlineText(root.tick) + Model.staleText(root.tick)
-                color: Model.deadlineColor(root.tick)
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.body
+            Button {
+                text: "Prices"
+                selected: root.view === "prices"
+                onClicked: root.view = "prices"
+            }
+            Button {
+                text: "Insights"
+                selected: root.view === "insights"
+                onClicked: root.view = "insights"
+            }
+            Button {
+                text: String.fromCharCode(0xF013)
+                selected: root.view === "settings"
+                tooltipText: "Settings"
+                onClicked: root.view = "settings"
             }
         }
 
-        // --- Settings: Team ID / League ID / sample size ---
+        // --- Team view: live header, squad news, chips ---
         Column {
-            spacing: Style.space(6)
+            visible: root.view === "team"
+            spacing: Style.space(14)
+            width: parent.width
+
+            Column {
+                spacing: Style.space(4)
+                width: parent.width
+                Text {
+                    textFormat: Text.PlainText
+                    text: Model.liveSummaryText(root.tick)
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.title
+                    font.bold: true
+                }
+                Text {
+                    textFormat: Text.PlainText
+                    text: Model.deadlineText(root.tick) + Model.staleText(root.tick)
+                    color: Model.deadlineColor(root.tick)
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                }
+            }
+
+            Column {
+                spacing: Style.space(6)
+                width: parent.width
+                PanelSectionHeader {
+                    text: "Squad News"
+                    foreground: root.contentForeground
+                    fontFamily: root.contentFontFamily
+                }
+                Text {
+                    visible: Model.squadNewsState(root.tick) === "need-id"
+                    textFormat: Text.PlainText
+                    text: "Set your Team ID in Settings (gear above) to see flags for your 15."
+                    color: root.dimForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
                     width: parent.width
+                }
+                Text {
+                    visible: Model.squadNewsState(root.tick) === "loading"
+                    textFormat: Text.PlainText
+                    text: "Loading squad news…"
+                    color: root.dimForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                }
+                Text {
+                    visible: Model.squadNewsState(root.tick) === "ready" && Model.squadNews(root.tick).length === 0
+                    textFormat: Text.PlainText
+                    text: "All clear — no injury, doubt, or suspension flags in your squad."
+                    color: root.dimForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
+                    width: parent.width
+                }
+                Repeater {
+                    model: Model.squadNews(root.tick)
+                    delegate: Column {
+                        spacing: 2
+                        width: parent.width
+                        Text {
+                            textFormat: Text.PlainText
+                            text: (modelData.onBench ? "🪑 " : "") + modelData.playerName + " — " + modelData.statusLabel + (modelData.isCaptain ? " (C)" : "") + (modelData.isViceCaptain ? " (V)" : "")
+                            color: (modelData.status === "s" || modelData.status === "u") ? root.urgentColor : root.contentForeground
+                            font.family: root.contentFontFamily
+                            font.pixelSize: Style.font.body
+                            font.bold: true
+                        }
+                        Text {
+                            textFormat: Text.PlainText
+                            text: modelData.note + (modelData.chanceOfPlaying !== null ? " (" + modelData.chanceOfPlaying + "%)" : "")
+                            color: root.dimForeground
+                            font.family: root.contentFontFamily
+                            font.pixelSize: Style.font.bodySmall
+                            wrapMode: Text.WordWrap
+                            width: parent.width
+                        }
+                    }
+                }
+            }
+
+            Column {
+                spacing: Style.space(6)
+                width: parent.width
+                PanelSectionHeader {
+                    text: "Chips"
+                    foreground: root.contentForeground
+                    fontFamily: root.contentFontFamily
+                }
+                Text {
+                    visible: Model.chipState(root.tick) === "need-id"
+                    textFormat: Text.PlainText
+                    text: "Set your Team ID in Settings to track chip usage."
+                    color: root.dimForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                }
+                Text {
+                    visible: Model.chipState(root.tick) === "loading"
+                    textFormat: Text.PlainText
+                    text: "Loading chips…"
+                    color: root.dimForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                }
+                Text {
+                    visible: Model.chipState(root.tick) === "ready"
+                    textFormat: Text.PlainText
+                    text: Model.chipSummaryText(root.tick)
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                }
+                Repeater {
+                    model: Model.chipStatus(root.tick)
+                    delegate: Text {
+                        textFormat: Text.PlainText
+                        text: (modelData.used ? "✓ " : "○ ") + modelData.name + (modelData.used && modelData.usedEvent !== null ? " — used GW" + modelData.usedEvent : ": available")
+                        color: modelData.used ? root.dimForeground : root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.body
+                    }
+                }
+            }
+        }
+
+        // --- Prices view ---
+        Column {
+            visible: root.view === "prices"
+            spacing: Style.space(6)
+            width: parent.width
+            PanelSectionHeader {
+                text: "Price Watch"
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+            }
+            Text {
+                visible: Model.priceWatchState(root.tick) === "loading"
+                textFormat: Text.PlainText
+                text: "Loading prices…"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+            }
+            Text {
+                visible: Model.priceWatchState(root.tick) === "baseline"
+                textFormat: Text.PlainText
+                text: "Collecting baseline — price moves appear after the next data refresh."
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: Text.WordWrap
+                width: parent.width
+            }
+            Text {
+                visible: Model.priceWatchState(root.tick) === "ready" && Model.priceWatch(root.tick).risers.length === 0 && Model.priceWatch(root.tick).fallers.length === 0
+                textFormat: Text.PlainText
+                text: "No notable price moves since yesterday."
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: Text.WordWrap
+                width: parent.width
+            }
+            Text {
+                visible: Model.priceWatch(root.tick).risers.length > 0
+                textFormat: Text.PlainText
+                text: "Rising"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+            }
+            Repeater {
+                model: Model.priceWatch(root.tick).risers
+                delegate: Text {
+                    textFormat: Text.PlainText
+                    text: "▲ " + modelData.playerName + (modelData.team !== "" ? " (" + modelData.team + ")" : "") + " " + modelData.cost + " — " + modelData.note
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
+                    width: parent.width
+                }
+            }
+            Text {
+                visible: Model.priceWatch(root.tick).fallers.length > 0
+                textFormat: Text.PlainText
+                text: "Falling"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+            }
+            Repeater {
+                model: Model.priceWatch(root.tick).fallers
+                delegate: Text {
+                    textFormat: Text.PlainText
+                    text: "▼ " + modelData.playerName + (modelData.team !== "" ? " (" + modelData.team + ")" : "") + " " + modelData.cost + " — " + modelData.note
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
+                    width: parent.width
+                }
+            }
+        }
+
+        // --- Insights view: what the sampled elites are doing —
+        //      descriptive signal ("top managers are favouring…"), never
+        //      directives. N + gameweek shown so the weight is clear.
+        Column {
+            visible: root.view === "insights"
+            spacing: Style.space(6)
+            width: parent.width
+            PanelSectionHeader {
+                text: "Top Manager Insights (GW " + Model.analysisGameweek(root.tick) + ", sample " + Model.analysisSampleSize(root.tick) + ")"
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+            }
+            Text {
+                visible: Model.topManagerState(root.tick) === "loading"
+                textFormat: Text.PlainText
+                text: "Sampling top managers… (once daily, slowest on first run)"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+            }
+            Text {
+                visible: Model.analysisNote(root.tick) !== ""
+                textFormat: Text.PlainText
+                text: Model.analysisNote(root.tick)
+                color: root.urgentColor
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+            }
+            Text {
+                visible: Model.topManagerState(root.tick) === "ready" && Model.consensusCaptains(root.tick).length > 0
+                textFormat: Text.PlainText
+                text: "Top managers are favouring as captain:"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+            }
+            Repeater {
+                model: Model.consensusCaptains(root.tick)
+                delegate: Text {
+                    textFormat: Text.PlainText
+                    text: modelData.playerName + " — " + modelData.captaincyPct + "% of sample" + (modelData.nextFixture !== "" ? " • " + modelData.nextFixture : "")
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
+                    width: parent.width
+                }
+            }
+            Text {
+                visible: Model.eliteDifferentialsIn(root.tick).length > 0
+                textFormat: Text.PlainText
+                text: "Elites own these far above the public (transfer-in candidates):"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+            }
+            Repeater {
+                model: Model.eliteDifferentialsIn(root.tick)
+                delegate: Text {
+                    textFormat: Text.PlainText
+                    text: modelData.playerName + " — " + modelData.topOwnershipPct + "% top-N vs " + modelData.globalOwnershipPct + "% global"
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
+                    width: parent.width
+                }
+            }
+            Text {
+                visible: Model.topManagerState(root.tick) === "ready" && !Model.hasOwnSquad(root.tick)
+                textFormat: Text.PlainText
+                text: "Set your Team ID in Settings to see which of your players the elites are fading."
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: Text.WordWrap
+                width: parent.width
+            }
+            Text {
+                visible: Model.hasOwnSquad(root.tick) && Model.eliteDifferentialsOut(root.tick).length > 0
+                textFormat: Text.PlainText
+                text: "Elites are fading these that you own (transfer-out candidates):"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+            }
+            Repeater {
+                model: Model.eliteDifferentialsOut(root.tick)
+                delegate: Text {
+                    textFormat: Text.PlainText
+                    text: modelData.playerName + " — " + modelData.topOwnershipPct + "% top-N vs " + modelData.globalOwnershipPct + "% global"
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
+                    width: parent.width
+                }
+            }
+            Text {
+                visible: Model.hasOwnSquad(root.tick) && Model.topManagerState(root.tick) === "ready" && Model.eliteDifferentialsOut(root.tick).length === 0
+                textFormat: Text.PlainText
+                text: "None of your players are being faded by the elites."
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: Text.WordWrap
+                width: parent.width
+            }
+            Text {
+                visible: Model.trendRowsIn(root.tick).length > 0 || Model.trendRowsOut(root.tick).length > 0
+                textFormat: Text.PlainText
+                text: "Week-over-week among elites (soft signal):"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+            }
+            Repeater {
+                model: Model.trendRowsIn(root.tick)
+                delegate: Text {
+                    textFormat: Text.PlainText
+                    text: "▲ " + modelData.playerName + " (+" + modelData.delta + " squads, " + modelData.currPct + "%)"
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                }
+            }
+            Repeater {
+                model: Model.trendRowsOut(root.tick)
+                delegate: Text {
+                    textFormat: Text.PlainText
+                    text: "▼ " + modelData.playerName + " (" + modelData.delta + " squads, " + modelData.currPct + "%)"
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                }
+            }
+        }
+
+        // --- Settings page (gear): Team ID / League ID / sample size ---
+        Column {
+            visible: root.view === "settings"
+            spacing: Style.space(6)
+            width: parent.width
             PanelSectionHeader {
                 text: "Settings"
                 foreground: root.contentForeground
@@ -242,337 +606,6 @@ Panel {
                     font.family: root.contentFontFamily
                     font.pixelSize: Style.font.bodySmall
                     anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-        }
-
-        // --- Squad news (Phase 2) ---
-        Column {
-            spacing: Style.space(6)
-                    width: parent.width
-            PanelSectionHeader {
-                text: "Squad News"
-                foreground: root.contentForeground
-                fontFamily: root.contentFontFamily
-            }
-            Text {
-                visible: Model.squadNewsState() === "need-id"
-                textFormat: Text.PlainText
-                text: "Set your Team ID above to see flags for your 15."
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.body
-                wrapMode: Text.WordWrap
-                width: parent.width
-            }
-            Text {
-                visible: Model.squadNewsState() === "loading"
-                textFormat: Text.PlainText
-                text: "Loading squad news…"
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.body
-            }
-            Text {
-                visible: Model.squadNewsState() === "ready" && Model.squadNews().length === 0
-                textFormat: Text.PlainText
-                text: "All clear — no injury, doubt, or suspension flags in your squad."
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.body
-                wrapMode: Text.WordWrap
-                width: parent.width
-            }
-            Repeater {
-                model: Model.squadNews()
-                delegate: Column {
-                    spacing: 2
-                    width: parent.width
-                    Text {
-                        textFormat: Text.PlainText
-                        text: (modelData.onBench ? "🪑 " : "") + modelData.playerName + " — " + modelData.statusLabel + (modelData.isCaptain ? " (C)" : "") + (modelData.isViceCaptain ? " (V)" : "")
-                        color: (modelData.status === "s" || modelData.status === "u") ? root.urgentColor : root.contentForeground
-                        font.family: root.contentFontFamily
-                        font.pixelSize: Style.font.body
-                        font.bold: true
-                    }
-                    Text {
-                        textFormat: Text.PlainText
-                        text: modelData.note + (modelData.chanceOfPlaying !== null ? " (" + modelData.chanceOfPlaying + "%)" : "")
-                        color: root.dimForeground
-                        font.family: root.contentFontFamily
-                        font.pixelSize: Style.font.bodySmall
-                        wrapMode: Text.WordWrap
-                        width: parent.width
-                    }
-                }
-            }
-        }
-
-        // --- Chips (Phase 2) ---
-        Column {
-            spacing: Style.space(6)
-                    width: parent.width
-            PanelSectionHeader {
-                text: "Chips"
-                foreground: root.contentForeground
-                fontFamily: root.contentFontFamily
-            }
-            Text {
-                visible: Model.chipState() === "need-id"
-                textFormat: Text.PlainText
-                text: "Set your Team ID above to track chip usage."
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.body
-            }
-            Text {
-                visible: Model.chipState() === "loading"
-                textFormat: Text.PlainText
-                text: "Loading chips…"
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.body
-            }
-            Text {
-                visible: Model.chipState() === "ready"
-                textFormat: Text.PlainText
-                text: Model.chipSummaryText()
-                color: root.contentForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.body
-                font.bold: true
-            }
-            Repeater {
-                model: Model.chipStatus()
-                delegate: Text {
-                    textFormat: Text.PlainText
-                    text: (modelData.used ? "✓ " : "○ ") + modelData.name + (modelData.used && modelData.usedEvent !== null ? " — used GW" + modelData.usedEvent : ": available")
-                    color: modelData.used ? root.dimForeground : root.contentForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.body
-                }
-            }
-        }
-
-        // --- Price watch (Phase 3) ---
-        Column {
-            spacing: Style.space(6)
-                    width: parent.width
-            PanelSectionHeader {
-                text: "Price Watch"
-                foreground: root.contentForeground
-                fontFamily: root.contentFontFamily
-            }
-            Text {
-                visible: Model.priceWatchState() === "loading"
-                textFormat: Text.PlainText
-                text: "Loading prices…"
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.body
-            }
-            Text {
-                visible: Model.priceWatchState() === "baseline"
-                textFormat: Text.PlainText
-                text: "Collecting baseline — price moves appear after the next data refresh."
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.body
-                wrapMode: Text.WordWrap
-                width: parent.width
-            }
-            Text {
-                visible: Model.priceWatchState() === "ready" && Model.priceWatch().risers.length === 0 && Model.priceWatch().fallers.length === 0
-                textFormat: Text.PlainText
-                text: "No notable price moves since yesterday."
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.body
-                wrapMode: Text.WordWrap
-                width: parent.width
-            }
-            Text {
-                visible: Model.priceWatch().risers.length > 0
-                textFormat: Text.PlainText
-                text: "Rising"
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-            }
-            Repeater {
-                model: Model.priceWatch().risers
-                delegate: Text {
-                    textFormat: Text.PlainText
-                    text: "▲ " + modelData.playerName + (modelData.team !== "" ? " (" + modelData.team + ")" : "") + " " + modelData.cost + " — " + modelData.note
-                    color: root.contentForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.body
-                    wrapMode: Text.WordWrap
-                    width: parent.width
-                }
-            }
-            Text {
-                visible: Model.priceWatch().fallers.length > 0
-                textFormat: Text.PlainText
-                text: "Falling"
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-            }
-            Repeater {
-                model: Model.priceWatch().fallers
-                delegate: Text {
-                    textFormat: Text.PlainText
-                    text: "▼ " + modelData.playerName + (modelData.team !== "" ? " (" + modelData.team + ")" : "") + " " + modelData.cost + " — " + modelData.note
-                    color: root.contentForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.body
-                    wrapMode: Text.WordWrap
-                    width: parent.width
-                }
-            }
-        }
-
-        // --- Top Manager Insights (Phase 4): what the sampled elites are
-        //      doing — descriptive signal ("top managers are favouring…"),
-        //      never directives. N + gameweek shown so the weight is clear.
-        Column {
-            spacing: Style.space(6)
-                    width: parent.width
-            PanelSectionHeader {
-                text: "Top Manager Insights (GW " + Model.analysisGameweek() + ", sample " + Model.analysisSampleSize() + ")"
-                foreground: root.contentForeground
-                fontFamily: root.contentFontFamily
-            }
-            Text {
-                visible: Model.topManagerState() === "loading"
-                textFormat: Text.PlainText
-                text: "Sampling top managers… (once daily, slowest on first run)"
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.body
-            }
-            Text {
-                visible: Model.analysisNote() !== ""
-                textFormat: Text.PlainText
-                text: Model.analysisNote()
-                color: root.urgentColor
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.bodySmall
-            }
-            Text {
-                visible: Model.topManagerState() === "ready" && Model.consensusCaptains().length > 0
-                textFormat: Text.PlainText
-                text: "Top managers are favouring as captain:"
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-            }
-            Repeater {
-                model: Model.consensusCaptains()
-                delegate: Text {
-                    textFormat: Text.PlainText
-                    text: modelData.playerName + " — " + modelData.captaincyPct + "% of sample" + (modelData.nextFixture !== "" ? " • " + modelData.nextFixture : "")
-                    color: root.contentForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.body
-                    wrapMode: Text.WordWrap
-                    width: parent.width
-                }
-            }
-            Text {
-                visible: Model.eliteDifferentialsIn().length > 0
-                textFormat: Text.PlainText
-                text: "Elites own these far above the public (transfer-in candidates):"
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-            }
-            Repeater {
-                model: Model.eliteDifferentialsIn()
-                delegate: Text {
-                    textFormat: Text.PlainText
-                    text: modelData.playerName + " — " + modelData.topOwnershipPct + "% top-N vs " + modelData.globalOwnershipPct + "% global"
-                    color: root.contentForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.body
-                    wrapMode: Text.WordWrap
-                    width: parent.width
-                }
-            }
-            Text {
-                visible: Model.topManagerState() === "ready" && !Model.hasOwnSquad()
-                textFormat: Text.PlainText
-                text: "Set your Team ID above to see which of your players the elites are fading."
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.body
-                wrapMode: Text.WordWrap
-                width: parent.width
-            }
-            Text {
-                visible: Model.hasOwnSquad() && Model.eliteDifferentialsOut().length > 0
-                textFormat: Text.PlainText
-                text: "Elites are fading these that you own (transfer-out candidates):"
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-            }
-            Repeater {
-                model: Model.eliteDifferentialsOut()
-                delegate: Text {
-                    textFormat: Text.PlainText
-                    text: modelData.playerName + " — " + modelData.topOwnershipPct + "% top-N vs " + modelData.globalOwnershipPct + "% global"
-                    color: root.contentForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.body
-                    wrapMode: Text.WordWrap
-                    width: parent.width
-                }
-            }
-            Text {
-                visible: Model.hasOwnSquad() && Model.topManagerState() === "ready" && Model.eliteDifferentialsOut().length === 0
-                textFormat: Text.PlainText
-                text: "None of your players are being faded by the elites."
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.body
-                wrapMode: Text.WordWrap
-                width: parent.width
-            }
-            Text {
-                visible: Model.trendRowsIn().length > 0 || Model.trendRowsOut().length > 0
-                textFormat: Text.PlainText
-                text: "Week-over-week among elites (soft signal):"
-                color: root.dimForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-            }
-            Repeater {
-                model: Model.trendRowsIn()
-                delegate: Text {
-                    textFormat: Text.PlainText
-                    text: "▲ " + modelData.playerName + " (+" + modelData.delta + " squads, " + modelData.currPct + "%)"
-                    color: root.contentForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.body
-                }
-            }
-            Repeater {
-                model: Model.trendRowsOut()
-                delegate: Text {
-                    textFormat: Text.PlainText
-                    text: "▼ " + modelData.playerName + " (" + modelData.delta + " squads, " + modelData.currPct + "%)"
-                    color: root.contentForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.body
                 }
             }
         }
