@@ -119,7 +119,7 @@ BarWidget {
         function show(): void { root.open() }
         function hide(): void { root.close() }
         function toggle(): void { root.togglePanel() }
-        function tab(viewName): void { root.openView(viewName) }
+        function tab(viewName: string): void { root.openView(viewName) }
     }
 
     WidgetButton {
