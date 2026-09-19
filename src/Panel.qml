@@ -4,7 +4,7 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// FPL Radar panel: tabbed views (Team / Prices / Insights) plus a dedicated
+// FPL Radar panel: tabbed views (Team / Prices / Insights / Plan) plus a
 // Settings page behind the gear button. Renders only what Model.js hands
 // it — no aggregation logic, no network calls here.
 //
@@ -27,7 +27,7 @@ Panel {
     property var hostWidget: null
     readonly property var barIdentity: hostWidget || root
 
-    // Visible view: team | prices | insights | settings.
+    // Visible view: team | prices | insights | plan | settings.
     property string view: "team"
 
     // Theme, guarded so the panel renders before the bar is injected.
@@ -161,6 +161,11 @@ Panel {
                 onClicked: root.view = "insights"
             }
             Button {
+                text: "Plan"
+                selected: root.view === "plan"
+                onClicked: root.view = "plan"
+            }
+            Button {
                 text: String.fromCharCode(0xF013)
                 selected: root.view === "settings"
                 tooltipText: "Settings"
@@ -235,6 +240,157 @@ Panel {
                         font.pixelSize: Style.font.body
                     }
                 }
+            }
+
+            // Season strip: points-per-gameweek sparkline + rank movement,
+            // straight from the history payload (no extra fetch, no storage).
+            Column {
+                visible: root.view === "team" && Model.hasEntryId(root.tick)
+                spacing: Style.space(6)
+                width: parent.width
+                Item {
+                    width: parent.width
+                    height: Math.max(seasonHeader.implicitHeight, seasonMeta.implicitHeight)
+                    PanelSectionHeader {
+                        id: seasonHeader
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Season"
+                        foreground: root.contentForeground
+                        fontFamily: root.contentFontFamily
+                    }
+                    Text {
+                        id: seasonMeta
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        textFormat: Text.PlainText
+                        text: Model.seasonRankLine(root.tick)
+                        color: root.dimForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.caption
+                    }
+                }
+                Text {
+                    visible: Model.seasonState(root.tick) === "loading"
+                    textFormat: Text.PlainText
+                    text: "Loading season…"
+                    color: root.dimForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                }
+                Canvas {
+                    id: seasonCanvas
+                    visible: Model.seasonPoints(root.tick).length >= 2
+                    width: parent.width
+                    height: 64
+                    property var pts: Model.seasonPoints(root.tick)
+                    property color line: Color.accent
+                    onPtsChanged: requestPaint()
+                    onPaint: {
+                        var ctx = getContext("2d")
+                        var pts = seasonCanvas.pts
+                        ctx.clearRect(0, 0, width, height)
+                        if (!pts || pts.length < 2) return
+                        var min = Math.min.apply(null, pts)
+                        var max = Math.max.apply(null, pts)
+                        var span = (max - min) || 1
+                        var pad = 6
+                        function x(i) { return pad + (width - pad * 2) * (i / (pts.length - 1)) }
+                        function y(v) { return height - pad - (height - pad * 2) * ((v - min) / span) }
+                        ctx.strokeStyle = seasonCanvas.line
+                        ctx.lineWidth = 2
+                        ctx.lineJoin = "round"
+                        ctx.beginPath()
+                        ctx.moveTo(x(0), y(pts[0]))
+                        for (var i = 1; i < pts.length; i++) ctx.lineTo(x(i), y(pts[i]))
+                        ctx.stroke()
+                        ctx.fillStyle = seasonCanvas.line
+                        ctx.beginPath()
+                        ctx.arc(x(pts.length - 1), y(pts[pts.length - 1]), 3, 0, Math.PI * 2)
+                        ctx.fill()
+                    }
+                }
+                Text {
+                    visible: Model.seasonState(root.tick) === "ready" && Model.seasonBest(root.tick) !== null
+                    textFormat: Text.PlainText
+                    text: "Best: " + Model.seasonBest(root.tick).points + " pts (GW" + Model.seasonBest(root.tick).gw + ")"
+                    color: root.dimForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.bodySmall
+                }
+            }
+
+            Column {
+                visible: root.view === "team" && Model.lineupState(root.tick) === "ready" && !Model.lineupCheck(root.tick).allClear
+                spacing: Style.space(6)
+                width: parent.width
+                Item {
+                    width: parent.width
+                    height: Math.max(lineupHeader.implicitHeight, lineupMeta.implicitHeight)
+                    PanelSectionHeader {
+                        id: lineupHeader
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Lineup Check"
+                        foreground: root.contentForeground
+                        fontFamily: root.contentFontFamily
+                    }
+                    Text {
+                        id: lineupMeta
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        textFormat: Text.PlainText
+                        text: Model.lineupCheck(root.tick).risks.length + " risks"
+                        color: root.urgentColor
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.caption
+                    }
+                }
+                Text {
+                    visible: Model.lineupCheck(root.tick).captain !== null && Model.lineupCheck(root.tick).captain.risk
+                    textFormat: Text.PlainText
+                    text: "(C) " + Model.lineupCheck(root.tick).captain.playerName + ": " + Model.lineupCheck(root.tick).captain.note
+                    color: root.urgentColor
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                    wrapMode: Text.WordWrap
+                    width: parent.width
+                }
+                Repeater {
+                    model: Model.lineupCheck(root.tick).risks
+                    delegate: Column {
+                        spacing: 2
+                        width: contentScroll.width
+                        Text {
+                            textFormat: Text.PlainText
+                            text: (modelData.tag !== "" ? "(" + modelData.tag + ") " : "") + modelData.playerName + " — " + modelData.reasons.join(", ")
+                            color: root.contentForeground
+                            font.family: root.contentFontFamily
+                            font.pixelSize: Style.font.body
+                            font.bold: true
+                            wrapMode: Text.WordWrap
+                            width: parent.width
+                        }
+                        Text {
+                            textFormat: Text.PlainText
+                            text: modelData.coverName !== null ? "Covered by " + modelData.coverName + " (autosub)" : "NO BENCH COVER"
+                            color: modelData.coverName !== null ? root.dimForeground : root.urgentColor
+                            font.family: root.contentFontFamily
+                            font.pixelSize: Style.font.bodySmall
+                        }
+                    }
+                }
+            }
+            Text {
+                visible: root.view === "team" && Model.lineupState(root.tick) === "ready" && Model.lineupCheck(root.tick).allClear
+                textFormat: Text.PlainText
+                text: "Lineup check: captain, vice and XI all clear."
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: Text.WordWrap
+                width: parent.width
             }
 
             Column {
@@ -313,80 +469,6 @@ Panel {
                             font.pixelSize: Style.font.bodySmall
                             wrapMode: Text.WordWrap
                             width: parent.width
-                        }
-                    }
-                }
-            }
-
-            Column {
-                spacing: Style.space(6)
-                width: parent.width
-                Item {
-                    width: parent.width
-                    height: Math.max(chipsHeader.implicitHeight, chipsMeta.implicitHeight)
-                    PanelSectionHeader {
-                        id: chipsHeader
-                        anchors.left: parent.left
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "Chips"
-                        foreground: root.contentForeground
-                        fontFamily: root.contentFontFamily
-                    }
-                    Text {
-                        id: chipsMeta
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        textFormat: Text.PlainText
-                        text: Model.chipState(root.tick) === "ready"
-                              ? Model.chipStatus(root.tick).filter(function (c) { return !c.used }).length + " left"
-                              : ""
-                        color: root.dimForeground
-                        font.family: root.contentFontFamily
-                        font.pixelSize: Style.font.caption
-                    }
-                }
-                Text {
-                    visible: Model.chipState(root.tick) === "need-id"
-                    textFormat: Text.PlainText
-                    text: "Set your Team ID in Settings to track chip usage."
-                    color: root.dimForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.body
-                }
-                Text {
-                    visible: Model.chipState(root.tick) === "loading"
-                    textFormat: Text.PlainText
-                    text: "Loading chips…"
-                    color: root.dimForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.body
-                }
-                Repeater {
-                    model: Model.chipStatus(root.tick)
-                    delegate: Item {
-                        width: contentScroll.width
-                        height: Math.max(chipName.implicitHeight, chipState.implicitHeight)
-                        Text {
-                            id: chipName
-                            anchors.left: parent.left
-                            anchors.verticalCenter: parent.verticalCenter
-                            textFormat: Text.PlainText
-                            text: (modelData.used ? "✓ " : "○ ") + modelData.name
-                            color: modelData.used ? root.dimForeground : root.contentForeground
-                            font.family: root.contentFontFamily
-                            font.pixelSize: Style.font.body
-                            font.bold: !modelData.used
-                        }
-                        Text {
-                            id: chipState
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-                            textFormat: Text.PlainText
-                            text: modelData.used && modelData.usedEvent !== null ? "USED GW" + modelData.usedEvent : "READY"
-                            color: modelData.used ? root.dimForeground : root.contentForeground
-                            font.family: root.contentFontFamily
-                            font.pixelSize: Style.font.caption
-                            font.bold: !modelData.used
                         }
                     }
                 }
@@ -666,6 +748,199 @@ Panel {
                     color: root.contentForeground
                     font.family: root.contentFontFamily
                     font.pixelSize: Style.font.body
+                }
+            }
+        }
+
+        // --- Plan view: transfers, chips, blank/double windows ---
+        Column {
+            visible: root.view === "plan"
+            spacing: Style.space(6)
+            width: parent.width
+            PanelSectionHeader {
+                text: "Transfer Digest"
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+            }
+            Text {
+                visible: Model.transferDigestState(root.tick) === "need-id"
+                textFormat: Text.PlainText
+                text: "Set your Team ID in Settings to judge your transfers against the elites."
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: Text.WordWrap
+                width: parent.width
+            }
+            Text {
+                visible: Model.transferDigestState(root.tick) === "loading"
+                textFormat: Text.PlainText
+                text: "Loading transfers…"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+            }
+            Text {
+                visible: Model.transferDigestState(root.tick) === "ready" && Model.transferDigest(root.tick).moves.length === 0
+                textFormat: Text.PlainText
+                text: "No transfers made this gameweek yet."
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+            }
+            Repeater {
+                model: Model.transferDigest(root.tick).moves
+                delegate: Column {
+                    spacing: 2
+                    width: contentScroll.width
+                    Text {
+                        textFormat: Text.PlainText
+                        text: modelData.outName + " → " + modelData.inName
+                        color: root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.body
+                        font.bold: true
+                    }
+                    Text {
+                        textFormat: Text.PlainText
+                        text: "In: " + modelData.verdictIn
+                        color: root.dimForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+                    Text {
+                        textFormat: Text.PlainText
+                        text: "Out: " + modelData.verdictOut
+                        color: root.dimForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+                }
+            }
+            Column {
+                spacing: Style.space(6)
+                width: parent.width
+                Item {
+                    width: parent.width
+                    height: Math.max(chipsHeader.implicitHeight, chipsMeta.implicitHeight)
+                    PanelSectionHeader {
+                        id: chipsHeader
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Chips"
+                        foreground: root.contentForeground
+                        fontFamily: root.contentFontFamily
+                    }
+                    Text {
+                        id: chipsMeta
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        textFormat: Text.PlainText
+                        text: Model.chipState(root.tick) === "ready"
+                              ? Model.chipStatus(root.tick).filter(function (c) { return !c.used }).length + " left"
+                              : ""
+                        color: root.dimForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.caption
+                    }
+                }
+                Text {
+                    visible: Model.chipState(root.tick) === "need-id"
+                    textFormat: Text.PlainText
+                    text: "Set your Team ID in Settings to track chip usage."
+                    color: root.dimForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                }
+                Text {
+                    visible: Model.chipState(root.tick) === "loading"
+                    textFormat: Text.PlainText
+                    text: "Loading chips…"
+                    color: root.dimForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                }
+                Repeater {
+                    model: Model.chipStatus(root.tick)
+                    delegate: Item {
+                        width: contentScroll.width
+                        height: Math.max(chipName.implicitHeight, chipState.implicitHeight)
+                        Text {
+                            id: chipName
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            textFormat: Text.PlainText
+                            text: (modelData.used ? "✓ " : "○ ") + modelData.name
+                            color: modelData.used ? root.dimForeground : root.contentForeground
+                            font.family: root.contentFontFamily
+                            font.pixelSize: Style.font.body
+                            font.bold: !modelData.used
+                        }
+                        Text {
+                            id: chipState
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            textFormat: Text.PlainText
+                            text: modelData.used && modelData.usedEvent !== null ? "USED GW" + modelData.usedEvent : "READY"
+                            color: modelData.used ? root.dimForeground : root.contentForeground
+                            font.family: root.contentFontFamily
+                            font.pixelSize: Style.font.caption
+                            font.bold: !modelData.used
+                        }
+                    }
+                }
+            }
+            PanelSectionHeader {
+                text: "Blank & Double Gameweeks"
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+            }
+            Text {
+                visible: Model.fixturePlanState(root.tick) === "loading"
+                textFormat: Text.PlainText
+                text: "Loading fixtures…"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+            }
+            Text {
+                visible: Model.fixturePlanState(root.tick) === "ready" && Model.fixturePlan(root.tick).length === 0
+                textFormat: Text.PlainText
+                text: "No blanks or doubles in the next 6 gameweeks — every team plays once."
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: Text.WordWrap
+                width: parent.width
+            }
+            Repeater {
+                model: Model.fixturePlan(root.tick)
+                delegate: Column {
+                    spacing: 2
+                    width: contentScroll.width
+                    Text {
+                        textFormat: Text.PlainText
+                        text: "GW" + modelData.gw + (modelData.doubles.length > 0 ? " — double: " + modelData.doubles.join(", ") : "") + (modelData.blanks.length > 0 ? " — blank: " + modelData.blanks.join(", ") : "")
+                        color: root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.body
+                        font.bold: true
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+                    Text {
+                        textFormat: Text.PlainText
+                        text: modelData.hint
+                        color: root.dimForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
                 }
             }
         }

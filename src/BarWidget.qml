@@ -37,9 +37,9 @@ BarWidget {
     }
 
     // Open the panel straight onto a tab: team | prices | insights |
-    // settings. Backs the `tab` IPC route so it can be keybound in Hyprland.
+    // plan | settings. Backs the `tab` IPC route so it can be keybound.
     function openView(name) {
-        var views = ["team", "prices", "insights", "settings"]
+        var views = ["team", "prices", "insights", "plan", "settings"]
         if (views.indexOf(name) === -1) return
         if (panelLoader.item) {
             panelLoader.item.view = name
