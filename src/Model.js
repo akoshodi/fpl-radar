@@ -217,16 +217,18 @@ function isLive(_tick) {
     if (cur.finished) return false
     var dl = deadlineMs()
     var next = nextEvent()
-    // If the "current" GW's own deadline is known, use it; otherwise any
-    // is_current && !finished event counts as live (defensive against
-    // mid-season endpoint shape quirks).
+    // If the "current" GW's own deadline is known, use it; otherwise fall
+    // back to the next deadline when current and next are the same event.
+    // When the shape is unrecognisable, assume NOT live: a false negative
+    // just delays live polling, while a false positive paints the pill
+    // urgent red and hammers the live endpoint for no reason.
     if (cur.deadline_time) {
         var curDl = Date.parse(cur.deadline_time)
         if (!isNaN(curDl)) return _now() >= curDl
-        return true
+        return false
     }
     if (dl !== null && next && cur.id === next.id) return _now() >= dl
-    return true
+    return false
 }
 
 function isInLiveWindow() {

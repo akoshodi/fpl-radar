@@ -74,6 +74,9 @@ Panel {
         entry.leagueId = Number(leagueField) || 314
         entry.topManagerSampleSize = Model._clampSampleSize(Number(sampleField) || 50)
         settings = entry
+        // Keep the host bar-widget's copy in step (clock pattern) so the
+        // bar and panel never disagree about the configured IDs.
+        if (root.hostWidget && "settings" in root.hostWidget) root.hostWidget.settings = entry
         bar.shell.updateEntryInline(moduleName, entry)
         syncSettingsFromHost()
         settingsFeedback = "Saved — refreshing…"
@@ -97,17 +100,47 @@ Panel {
     }
     onSettingsChanged: syncSettingsFromHost()
 
-    // Panel content. Width follows the shell popup; height is content-driven.
-    Column {
-        id: content
-        spacing: Style.space(14)
-        padding: Style.space(14)
-        width: root.width > 0 ? root.width : 380
+    // Panel content lives in the canonical popup window (KeyboardPanel).
+    // The base Panel only owns open/close state — it renders no window
+    // itself, so a bare Column child would never become visible (and the
+    // bar-pill click would silently no-op). This mirrors the clock/monitor
+    // pattern: KeyboardPanel + PanelKeyCatcher + Flickable + Column.
+    KeyboardPanel {
+        id: panel
+        anchorItem: root.anchorItem
+        owner: root.barIdentity
+        bar: root.bar
+        open: root.opened
+        centerOnBar: true
+        focusTarget: keyCatcher
+        contentWidth: panel.fittedContentWidth(Style.space(420))
+        contentHeight: panel.fittedContentHeight(contentColumn.implicitHeight)
+
+        PanelKeyCatcher {
+            id: keyCatcher
+            anchors.fill: parent
+            onCloseRequested: root.close()
+            onTabRequested: function(direction) { root.switchPanel(direction) }
+
+            Flickable {
+                id: contentScroll
+                anchors.fill: parent
+                anchors.margins: Style.space(14)
+                contentWidth: width
+                contentHeight: contentColumn.implicitHeight
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                interactive: contentHeight > height
+
+                Column {
+                    id: contentColumn
+                    width: contentScroll.width
+                    spacing: Style.space(14)
 
         // --- Header: live summary + freshness ---
         Column {
             spacing: Style.space(4)
-            width: parent.width - Style.space(28)
+                    width: parent.width
             Text {
                 textFormat: Text.PlainText
                 text: Model.liveSummaryText(root.tick)
@@ -128,7 +161,7 @@ Panel {
         // --- Settings: Team ID / League ID / sample size ---
         Column {
             spacing: Style.space(6)
-            width: parent.width - Style.space(28)
+                    width: parent.width
             PanelSectionHeader {
                 text: "Settings"
                 foreground: root.contentForeground
@@ -216,7 +249,7 @@ Panel {
         // --- Squad news (Phase 2) ---
         Column {
             spacing: Style.space(6)
-            width: parent.width - Style.space(28)
+                    width: parent.width
             PanelSectionHeader {
                 text: "Squad News"
                 foreground: root.contentForeground
@@ -279,7 +312,7 @@ Panel {
         // --- Chips (Phase 2) ---
         Column {
             spacing: Style.space(6)
-            width: parent.width - Style.space(28)
+                    width: parent.width
             PanelSectionHeader {
                 text: "Chips"
                 foreground: root.contentForeground
@@ -325,7 +358,7 @@ Panel {
         // --- Price watch (Phase 3 — placeholder, not blank) ---
         Column {
             spacing: Style.space(6)
-            width: parent.width - Style.space(28)
+                    width: parent.width
             PanelSectionHeader {
                 text: "Price Watch"
                 foreground: root.contentForeground
@@ -345,7 +378,7 @@ Panel {
         // --- Top Manager Insights (Phase 4 — placeholder, not blank) ---
         Column {
             spacing: Style.space(6)
-            width: parent.width - Style.space(28)
+                    width: parent.width
             PanelSectionHeader {
                 text: "Top Manager Insights (GW " + Model.analysisGameweek() + ", sample " + Model.analysisSampleSize() + ")"
                 foreground: root.contentForeground
@@ -359,6 +392,9 @@ Panel {
                 font.pixelSize: Style.font.body
                 wrapMode: Text.WordWrap
                 width: parent.width
+            }
+        }
+                }
             }
         }
     }
