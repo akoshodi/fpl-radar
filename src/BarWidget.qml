@@ -19,12 +19,12 @@ BarWidget {
     // binding re-evaluation (the value never affects results).
     property int tick: 0
 
-    // What the bar pill shows. Leads with a football glyph (fa-futbol-o,
-    // verified present in the bar's Nerd Font) so the widget reads as an
-    // icon + text, then live Model state so the pill tracks points and
-    // deadline without reopening anything.
+    // Icon-only pill: a football glyph (fa-futbol-o, verified present in
+    // the bar's Nerd Font via String.fromCharCode to avoid encoding risk).
+    // Points and deadline live one click away in the panel header; hover
+    // shows them as a tooltip. Still turns urgent-red while live.
     readonly property string pillIcon: String.fromCharCode(0xF1E3)
-    readonly property string pillText: pillIcon + " " + Model.liveSummaryText(tick) + "  •  " + Model.deadlineText(tick)
+    readonly property string pillText: pillIcon
     readonly property bool pillLive: Model.isLive(tick)
 
     function refresh() {
@@ -116,7 +116,7 @@ BarWidget {
         bar: root.bar
         text: root.pillText
         active: root.pillLive
-        tooltipText: Model.deadlineText(root.tick)
+        tooltipText: Model.liveSummaryText(root.tick) + "  •  " + Model.deadlineText(root.tick)
         onPressed: function (b) {
             if (b === Qt.MiddleButton) root.refresh()
             else root.togglePanel()
