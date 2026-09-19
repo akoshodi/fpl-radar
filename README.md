@@ -1,76 +1,91 @@
-# FPL Companion — Omarchy Plugin
+# FPL Radar
 
-A Fantasy Premier League (FPL) companion plugin for [Omarchy](https://omarchy.org). Gives you a bar widget for live gameweek points and deadline countdowns, plus a panel for transfer planning, captain picks, price-change alerts, and squad news — without asking you to install a backend runtime.
+Live Fantasy Premier League insight in your Omarchy bar: a pill with your
+gameweek points and the transfer-deadline countdown, and a panel with
+settings, squad news, chip tracking, price watch, and top-manager-based
+transfer/captain suggestions. Pure QML + JavaScript — no backend runtime,
+no extra dependencies. Data comes from the public FPL API and is cached
+locally; only the FPL API is ever contacted.
 
-This repo is set up to be built primarily with an AI coding agent (Claude Code, Cursor, etc.). See [`AGENTS.md`](./AGENTS.md) for the rules the agent should follow, and [`docs/`](./docs) for architecture and data-source details.
-
-## Features
-
-- **Live gameweek points** — bar widget ticks up as your 15 players score, assist, and pick up bonus points.
-- **Deadline guard** — countdown that changes color as the transfer deadline approaches (amber → red).
-- **Price-change watch** — flags players trending to rise/fall based on ownership deltas.
-- **Squad news** — surfaces injury/press-conference flags for your players (from FPL's own status fields).
-- **Chip tracker** — reminds you which chips (Wildcard, Bench Boost, Free Hit, Triple Captain) are unused.
-- **Transfer & captain suggestions from top managers** — analyzes the weekly selections of the highest-ranked FPL managers and surfaces captaincy consensus and differential transfer targets. See [`docs/ROADMAP.md`](./docs/ROADMAP.md#transfer--captain-suggestions-from-top-managers) for the methodology.
-
-## Why this stack
-
-Omarchy plugins run inside a Qt/QML runtime that's already part of the shell — nothing extra to install. This plugin is deliberately **pure QML + JavaScript**, calling the public FPL API directly with QML's built-in `XMLHttpRequest` and caching responses to a local JSON file with the `LocalStorage`/file APIs that ship with Qt Quick.
-
-No Node, Python, PHP, or database server required. A user installs this the same way they'd install any other Omarchy plugin — clone, enable, done. That matters if you want other Omarchy users to actually pick it up: every extra runtime dependency is a reason someone bounces off the install step.
-
-If you outgrow pure QML (e.g. you want heavier historical analysis than a phone-sized JSON cache can hold), see the "Escape hatch" note in `docs/ARCHITECTURE.md` — but treat that as a last resort, not the default plan.
-
-## Installation
+## Install
 
 ```bash
-omarchy plugin add https://github.com/<your-username>/fpl-omarchy-plugin.git --enable --yes
+omarchy plugin add https://github.com/akoshodi/fpl-radar.git --enable --yes
+omarchy-shell shell rescanPlugins
 ```
 
-Or for local development, clone a copy under your Omarchy config and let the plugin manager discover it:
+Update later with:
 
 ```bash
-omarchy plugin clone <this-repo-url> yourname.fpl
-# edit files under ~/.config/omarchy/plugins/yourname.fpl/
-omarchy-shell shell rescanPlugins   # force discovery if it doesn't hot-reload
+omarchy plugin update akoshodi.fplradar --yes
+omarchy-shell shell rescanPlugins
 ```
 
-## Configuration
+## Bar pill
 
-Set your Team ID in either of two ways (panel edits win if both are set):
+- **Live gameweek points** — ticks up as your players score (`GW7 Live: 62 pts` while a gameweek is live, `GW7: 62 pts` otherwise).
+- **Deadline guard** — countdown to the next transfer deadline (`GW8: 1d 4h 12m`), amber under 3 hours, red under 30 minutes.
+- Shows `Set FPL ID in panel` until a Team ID is configured, and appends `(stale)` instead of going blank when offline or the API fails.
 
-1. **Panel (recommended)** — open the panel, type your Team ID, League ID, and top-N sample, then Save & refresh.
-2. **Bar config** — `omarchy plugin enable` supports a settings schema (`entryId`, `leagueId`, `topManagerSampleSize`), so the ID can also live in `~/.config/omarchy/shell.json`.
+Left-click opens the panel, middle-click refreshes. The pill only fetches
+when a cache TTL is stale — the live score at most once a minute, and only
+while a gameweek is actually live.
 
-- **FPL Team/Entry ID** — found in the URL when you view your team on the FPL site (`fantasy.premierleague.com/entry/<ID>/...`).
-- **League ID for top-manager analysis** *(optional)* — defaults to the global "Overall" league (`314`). Point it at a mini-league if you'd rather benchmark against your own group instead of the world's best.
+## Panel
 
-Settings are stored locally via the plugin's own config file — nothing is sent anywhere except the public FPL API.
+- **Settings** — Team ID, League ID, and top-N sample size, saved back to the widget's `shell.json` entry.
+- **Squad News** — injury/doubt/suspension flags for your 15, with captain/vice/bench markers and chance-of-playing % where FPL reports it. Says "All clear" when there is nothing to flag.
+- **Chips** — which of Wildcard, Free Hit, Bench Boost, Triple Captain are still available and which gameweek each used one went in.
+- **Price Watch** *(Phase 3)* — day-over-day price/transfer-delta risers and fallers.
+- **Top Manager Insights** *(Phase 4)* — what the sampled top managers are doing this gameweek: consensus captains, elite differentials (transfer-in candidates), and elites fading (transfer-out candidates among your players). Descriptive signal, not advice — percentages, not a synthetic score.
 
-## Project layout
+Click a section's Save & refresh after changing settings. `Esc` closes,
+`Tab` moves to the neighboring bar panel.
 
+## Settings
+
+Settings live in the widget's entry in `~/.config/omarchy/shell.json` and
+can also be edited in the panel (panel edits win). The top-level keys can
+be set with `omarchy bar set akoshodi.fplradar <key> <value>`:
+
+| Key | Default | What it does |
+|---|---|---|
+| `entryId` | — | Your FPL Team ID, from `fantasy.premierleague.com/entry/<ID>/...` |
+| `leagueId` | `314` | League for top-manager analysis (`314` = global Overall; point at a mini-league to benchmark your own group) |
+| `topManagerSampleSize` | `50` | How many top managers to sample (capped at 200 to avoid hammering the FPL API) |
+
+Numbers need `--json`, or they land in `shell.json` as strings:
+
+```bash
+omarchy bar set akoshodi.fplradar entryId 123456 --json
+omarchy bar set akoshodi.fplradar leagueId 314 --json
+omarchy bar set akoshodi.fplradar topManagerSampleSize 50 --json
 ```
-fpl-omarchy-plugin/
-├── AGENTS.md              # rules for AI coding agents working in this repo
-├── manifest.json          # Omarchy plugin manifest
-├── docs/
-│   ├── ARCHITECTURE.md    # how the pieces fit together, caching strategy
-│   ├── DATA_SOURCES.md    # FPL API endpoints used, rate limits, TTLs
-│   └── ROADMAP.md         # feature phases, incl. top-manager analysis methodology
-└── src/
-    ├── BarWidget.qml      # always-visible bar widget
-    ├── Panel.qml          # expanded panel (transfers, captain, chips, news)
-    ├── Model.js           # shared state, caching, refresh scheduling
-    └── lib/
-        ├── FplApi.js              # thin wrapper over the public FPL endpoints
-        └── TopManagerAnalysis.js  # captaincy/differential analysis over sampled top managers
-```
+
+## Data
+
+All data comes from the public, unauthenticated FPL API
+(`https://fantasy.premierleague.com/api/`), cached locally with a
+`fetchedAt` timestamp per endpoint:
+
+| Endpoint | Used for | Refreshes at most |
+|---|---|---|
+| `/bootstrap-static/` | Players, deadlines, ownership, prices | Every 6 hours |
+| `/entry/{id}/event/{gw}/picks/` | Your squad + confirmed points | Every hour |
+| `/event/{gw}/live/` | Live bonus/points ticker | Every 60s, only while a gameweek is live |
+| `/entry/{id}/history/` | Chip usage | Every hour |
+
+Top-manager picks (Phase 4) are throttled — one request every few hundred
+milliseconds, cached for the day — never fanned out concurrently. Anything
+that fails keeps the last cached value with a visible stale marker rather
+than retrying in a loop.
 
 ## Status
 
-- Phase 1 done: bar widget with live gameweek points + deadline countdown (`src/Model.js`, `src/BarWidget.qml`).
-- Phase 2 done: panel basics — settings (Team ID / League ID / top-N sample), squad news flags, chip tracker (`src/Panel.qml`, `src/Model.js`, `src/lib/FplApi.js`).
-- Next: Phase 3 price watch, then Phase 4 top-manager analysis — see [`docs/ROADMAP.md`](./docs/ROADMAP.md).
+Phases 1 (bar widget) and 2 (settings, squad news, chips) are done. Next:
+Phase 3 price watch, then Phase 4 top-manager analysis — see
+[`docs/ROADMAP.md`](./docs/ROADMAP.md). Notes for contributors and AI
+coding agents live in [`AGENTS.md`](./AGENTS.md).
 
 ## License
 
