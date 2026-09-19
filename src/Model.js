@@ -448,7 +448,9 @@ function lineupCheck() {
     var bs = state.cache.bootstrapStatic
     var op = state.cache.ownPicks
     if (!bs || !bs.data || !op || !op.data) {
-        return { captain: null, vice: null, risks: [], allClear: true }
+        return { captain: { playerName: "—", risk: false, note: "not set" },
+                 vice: { playerName: "—", risk: false, note: "not set" },
+                 risks: [], allClear: true }
     }
     var fx = state.cache.fixtures && state.cache.fixtures.data ? state.cache.fixtures.data : null
     var r = Lineup.computeLineupCheck(op.data, bs.data, fx, op.gameweek)
@@ -567,7 +569,8 @@ function seasonRanks() {
 
 function seasonBest() {
     var pts = seasonPoints()
-    if (pts.length === 0) return null
+    // Never null: QML text bindings evaluate even when invisible.
+    if (pts.length === 0) return { points: 0, gw: 0 }
     var best = pts[0]
     var gw = 1
     for (var i = 1; i < pts.length; i++) {
