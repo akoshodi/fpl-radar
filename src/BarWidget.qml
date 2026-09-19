@@ -93,6 +93,19 @@ BarWidget {
         }
     }
 
+    // Standard route so the shell (and remote debugging) can drive the
+    // widget the same way every other bar widget works. Clock pattern.
+    IpcHandler {
+        target: "akoshodi.fplradar"
+
+        function refresh(): void { root.broadcast("refresh") }
+        function open(): void { root.open() }
+        function close(): void { root.close() }
+        function show(): void { root.open() }
+        function hide(): void { root.close() }
+        function toggle(): void { root.togglePanel() }
+    }
+
     WidgetButton {
         id: button
         anchors.fill: parent
