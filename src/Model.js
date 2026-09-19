@@ -47,7 +47,8 @@ var TTL_MS = {
     entry: 3600 * 1000,                // 1 hour
     entryHistory: 3600 * 1000,         // 1 hour (chip tracker)
     ownPicks: 3600 * 1000,             // 1 hour for own team
-    liveEvent: 60 * 1000               // 60s, only polled while a GW is live
+    liveEvent: 60 * 1000,              // 60s, only polled while a GW is live
+    topManagerAnalysis: 24 * 3600 * 1000 // daily (docs/DATA_SOURCES.md)
 }
 
 var DEADLINE_AMBER_MS = 3 * 3600 * 1000   // under 3h → amber
@@ -657,6 +658,8 @@ function refreshAll() {
     refreshOwnPicksIfDue()
     refreshLiveIfDue()
     refreshEntryHistoryIfDue()
+    refreshFixturesIfDue()
+    refreshTopManagerAnalysis()
 }
 
 function refreshBootstrapIfDue() {
@@ -677,6 +680,8 @@ function refreshBootstrapIfDue() {
                 // current GW — chain the dependent refreshes.
                 refreshOwnPicksIfDue()
                 refreshLiveIfDue()
+                refreshFixturesIfDue()
+                refreshTopManagerAnalysis()
             },
             function (err) {
                 state.lastError = String(err)
@@ -765,13 +770,139 @@ function refreshEntryHistoryIfDue() {
 
 // ---- Top Manager Insights (docs/ROADMAP.md Phase 4) ----
 
+// Which gameweek to analyse: the current one once its deadline has passed
+// (picks are locked = final), else the most recently finished one —
+// analysing a still-open gameweek would read teams managers can change.
+function gwForAnalysis() {
+    var cur = currentEvent()
+    if (cur && !cur.finished && cur.deadline_time) {
+        var dl = Date.parse(cur.deadline_time)
+        if (!isNaN(dl) && _now() >= dl) return cur.id
+    }
+    var best = null
+    var events = _events()
+    for (var i = 0; i < events.length; i++) {
+        if (events[i].finished && (best === null || events[i].id > best)) best = events[i].id
+    }
+    if (best !== null) return best
+    return displayGameweek()
+}
+
+function needsFixturesRefresh() {
+    return !_isFresh(state.cache.fixtures, TTL_MS.fixtures)
+}
+
+function refreshFixturesIfDue(onDone) {
+    if (!needsFixturesRefresh()) {
+        if (onDone) onDone(true)
+        return
+    }
+    try {
+        Api.fetchFixtures(
+            function (data) {
+                state.cache.fixtures = { data: data, fetchedAt: _now() }
+                state.lastError = null
+                persist()
+                if (onDone) onDone(true)
+            },
+            function (err) {
+                state.lastError = String(err)
+                persist()
+                if (onDone) onDone(false)
+            }
+        )
+    } catch (e) {
+        state.lastError = String(e)
+        if (onDone) onDone(false)
+    }
+}
+
+function needsTopManagerRefresh() {
+    var a = state.cache.topManagerAnalysis
+    var gw = gwForAnalysis()
+    if (!a || !a.data) return true
+    if (gw !== null && a.gameweek !== gw) return true
+    if (a.leagueId !== state.settings.leagueId) return true
+    // Compare the CONFIGURED sample size, not ids found: small leagues
+    // legitimately return fewer teams than requested without going stale.
+    if (a.sampleSetting !== state.settings.topManagerSampleSize) return true
+    return !_isFresh(a, TTL_MS.topManagerAnalysis)
+}
+
+var _analysisRunning = false
+
 function refreshTopManagerAnalysis() {
-    // TODO(agent Phase 4): implement per docs/ROADMAP.md methodology:
-    //   1. Api.fetchLeagueStandings(state.settings.leagueId, sampleSize)
-    //   2. Api.fetchPicksForManagers(entryIds, gameweek) — throttled, see
-    //      docs/DATA_SOURCES.md rate-limit notes
-    //   3. Analysis.computeInsights(picksByManager, bootstrapStatic, gameweek)
-    //   4. Cache result with fetchedAt/gameweek/sampleSize.
+    if (_analysisRunning) return
+    if (!needsTopManagerRefresh()) return
+    var gw = gwForAnalysis()
+    if (gw === null) return  // no bootstrap yet; its callback re-triggers us
+    _analysisRunning = true
+    var leagueId = state.settings.leagueId
+    var sampleSize = state.settings.topManagerSampleSize
+    // Fixtures first (for next-fixture strings); analysis proceeds with or
+    // without them — a missing fixture is rendered as absent, never fatal.
+    refreshFixturesIfDue(function () {
+        try {
+            Api.fetchLeagueStandings(
+                leagueId,
+                sampleSize,
+                function (entryIds) {
+                    if (!entryIds || entryIds.length === 0) {
+                        state.lastError = "empty standings for league " + leagueId
+                        _analysisRunning = false
+                        persist()
+                        return
+                    }
+                    Api.fetchPicksForManagers(entryIds, gw, null, function (picks, gwStats) {
+                        var finishPrev = function (prevPicks, prevStats) {
+                            var bs = state.cache.bootstrapStatic
+                            var insights = Analysis.computeInsights(picks, bs ? bs.data : null, {
+                                topListSize: 5,
+                                fixtures: state.cache.fixtures ? state.cache.fixtures.data : null,
+                                gameweek: gw,
+                                prevPicksByManager: prevPicks
+                            })
+                            state.cache.topManagerAnalysis = {
+                                data: insights,
+                                fetchedAt: _now(),
+                                gameweek: gw,
+                                leagueId: leagueId,
+                                sampleSize: gwStats.succeeded,
+                                requestedSampleSize: gwStats.requested,
+                                sampleSetting: sampleSize,
+                                prevSampleSize: prevStats ? prevStats.succeeded : 0
+                            }
+                            state.lastError = null
+                            _analysisRunning = false
+                            persist()
+                        };
+                        // gw-1 trend is best-effort: without it the core
+                        // lists still compute; trend just stays empty.
+                        if (gw > 1) {
+                            Api.fetchPicksForManagers(entryIds, gw - 1, null, function (prevPicks, prevStats) {
+                                finishPrev(prevPicks, prevStats)
+                            })
+                        } else {
+                            finishPrev({}, { requested: 0, succeeded: 0, failed: 0 })
+                        }
+                    })
+                },
+                function (err) {
+                    state.lastError = String(err)
+                    _analysisRunning = false
+                    persist()
+                }
+            )
+        } catch (e) {
+            state.lastError = String(e)
+            _analysisRunning = false
+        }
+    })
+}
+
+function topManagerState() {
+    if (!state.cache.topManagerAnalysis || !state.cache.topManagerAnalysis.data) return "loading"
+    return "ready"
 }
 
 function analysisGameweek() {
@@ -782,6 +913,16 @@ function analysisSampleSize() {
     return state.cache.topManagerAnalysis ? state.cache.topManagerAnalysis.sampleSize : 0
 }
 
+// Honest partial-fetch flag per the Phase 4 guardrails, else "".
+function analysisNote() {
+    var a = state.cache.topManagerAnalysis
+    if (!a || !a.data) return ""
+    if (a.sampleSize < a.requestedSampleSize) {
+        return "partial: " + a.sampleSize + " of " + a.requestedSampleSize + " teams loaded"
+    }
+    return ""
+}
+
 function consensusCaptains() {
     return state.cache.topManagerAnalysis ? state.cache.topManagerAnalysis.data.consensusCaptains : []
 }
@@ -790,6 +931,39 @@ function eliteDifferentialsIn() {
     return state.cache.topManagerAnalysis ? state.cache.topManagerAnalysis.data.differentialsIn : []
 }
 
+// "Elites fading" scoped to players the user owns (needs own squad).
+function hasOwnSquad() {
+    return !!(state.cache.ownPicks && state.cache.ownPicks.data && state.cache.ownPicks.data.picks)
+}
+
+function ownElementIds() {
+    if (!hasOwnSquad()) return null
+    var ids = {}
+    var picks = state.cache.ownPicks.data.picks || []
+    for (var i = 0; i < picks.length; i++) {
+        if (picks[i].element !== undefined) ids[picks[i].element] = true
+    }
+    return ids
+}
+
 function eliteDifferentialsOut() {
-    return state.cache.topManagerAnalysis ? state.cache.topManagerAnalysis.data.differentialsOut : []
+    var a = state.cache.topManagerAnalysis
+    if (!a || !a.data) return []
+    var owned = ownElementIds()
+    if (!owned) return []
+    var rows = (a.data.differentials || []).filter(function (r) {
+        return owned[r.element] && r.differential < 0
+    })
+    rows.sort(function (x, y) { return x.differential - y.differential })
+    return rows.slice(0, 5)
+}
+
+function trendRowsIn() {
+    var a = state.cache.topManagerAnalysis
+    return a && a.data && a.data.trend ? a.data.trend.in : []
+}
+
+function trendRowsOut() {
+    var a = state.cache.topManagerAnalysis
+    return a && a.data && a.data.trend ? a.data.trend.out : []
 }
