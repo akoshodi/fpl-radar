@@ -36,6 +36,17 @@ BarWidget {
         if (panelLoader.item && panelLoader.item.toggle) panelLoader.item.toggle()
     }
 
+    // Open the panel straight onto a tab: team | prices | insights |
+    // settings. Backs the `tab` IPC route so it can be keybound in Hyprland.
+    function openView(name) {
+        var views = ["team", "prices", "insights", "settings"]
+        if (views.indexOf(name) === -1) return
+        if (panelLoader.item) {
+            panelLoader.item.view = name
+            if (panelLoader.item.open) panelLoader.item.open()
+        }
+    }
+
     // Shape contract for shell.summon/hide/toggle routing
     // (Bar.findPanelWidget requires open/close/opened on the root).
     readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
@@ -108,6 +119,7 @@ BarWidget {
         function show(): void { root.open() }
         function hide(): void { root.close() }
         function toggle(): void { root.togglePanel() }
+        function tab(viewName): void { root.openView(viewName) }
     }
 
     WidgetButton {

@@ -33,14 +33,24 @@ while a gameweek is actually live.
 
 ## Panel
 
+Tabbed control center — **Team** (gameweek hero card, squad news, chips),
+**Prices** (risers/fallers with meters), **Insights** (captain consensus,
+differentials, trend), plus a **gear page** for settings. Section headers
+carry right-aligned meta (flag counts, chips left, moves). Footer has
+Refresh and an Open FPL button (your team page, click-only).
+
 - **Settings** — Team ID, League ID, and top-N sample size, saved back to the widget's `shell.json` entry.
 - **Squad News** — injury/doubt/suspension flags for your 15, with captain/vice/bench markers and chance-of-playing % where FPL reports it. Says "All clear" when there is nothing to flag.
 - **Chips** — which of Wildcard, Free Hit, Bench Boost, Triple Captain are still available and which gameweek each used one went in.
-- **Price Watch** *(Phase 3)* — day-over-day price/transfer-delta risers and fallers.
-- **Top Manager Insights** *(Phase 4)* — what the sampled top managers are doing this gameweek: consensus captains, elite differentials (transfer-in candidates), and elites fading (transfer-out candidates among your players). Descriptive signal, not advice — percentages, not a synthetic score.
+- **Price Watch** — day-over-day price/transfer-delta risers and fallers.
+- **Top Manager Insights** — what the sampled top managers are doing this gameweek: consensus captains, elite differentials (transfer-in candidates), and elites fading (transfer-out candidates among your players). Descriptive signal, not advice — percentages, not a synthetic score.
 
 Click a section's Save & refresh after changing settings. `Esc` closes,
-`Tab` moves to the neighboring bar panel.
+`Tab` moves to the neighboring bar panel. Tabs are keybindable in Hyprland:
+
+```
+omarchy-shell akoshodi.fplradar tab <team|prices|insights|settings>
+```
 
 ## Settings
 

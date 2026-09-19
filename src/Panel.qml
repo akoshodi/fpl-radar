@@ -11,7 +11,12 @@ import "Model.js" as Model
 // Reactivity note: QML evaluates a binding ONCE unless it references a
 // changing property. Every Model.*() call below takes root.tick so all
 // sections re-evaluate each second while open (the argument is ignored by
-// the getters). Without it, sections freeze in their at-open state.
+// the getters). Repeater delegates use explicit contentScroll.width —
+// `parent.width` inside a delegate is unreliable.
+//
+// Visual idiom follows first-party panels and the fpl-tracker control
+// center: hero card, small-caps headers with right-aligned meta, dim
+// label / bright value stat rows, thin meters, footer action buttons.
 Panel {
     id: root
     moduleName: "akoshodi.fplradar"
@@ -163,18 +168,20 @@ Panel {
             }
         }
 
-        // --- Team view: live header, squad news, chips ---
+        // --- Team view ---
         Column {
             visible: root.view === "team"
             spacing: Style.space(14)
             width: parent.width
 
+            // Onboarding: no Team ID yet — one button into Settings.
             Column {
-                spacing: Style.space(4)
+                visible: !Model.hasEntryId(root.tick)
+                spacing: Style.space(6)
                 width: parent.width
                 Text {
                     textFormat: Text.PlainText
-                    text: Model.liveSummaryText(root.tick)
+                    text: "Welcome to FPL Radar"
                     color: root.contentForeground
                     font.family: root.contentFontFamily
                     font.pixelSize: Style.font.title
@@ -182,20 +189,80 @@ Panel {
                 }
                 Text {
                     textFormat: Text.PlainText
-                    text: Model.deadlineText(root.tick) + Model.staleText(root.tick)
-                    color: Model.deadlineColor(root.tick)
+                    text: "One step to start: paste your public Team ID from fantasy.premierleague.com/entry/<ID>/…"
+                    color: root.dimForeground
                     font.family: root.contentFontFamily
                     font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
+                    width: parent.width
+                }
+                Button {
+                    text: "Set Team ID"
+                    onClicked: root.view = "settings"
+                }
+            }
+
+            // Hero card: live points big, deadline + freshness beneath.
+            Rectangle {
+                visible: Model.hasEntryId(root.tick)
+                width: parent.width
+                height: heroInner.height + Style.space(16)
+                color: "transparent"
+                border.color: root.dimForeground
+                border.width: 1
+                radius: Style.cornerRadius
+                Column {
+                    id: heroInner
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.leftMargin: Style.space(12)
+                    anchors.rightMargin: Style.space(12)
+                    spacing: Style.space(4)
+                    Text {
+                        textFormat: Text.PlainText
+                        text: Model.liveSummaryText(root.tick)
+                        color: root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.title
+                        font.bold: true
+                    }
+                    Text {
+                        textFormat: Text.PlainText
+                        text: Model.deadlineText(root.tick) + Model.staleText(root.tick)
+                        color: Model.deadlineColor(root.tick)
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.body
+                    }
                 }
             }
 
             Column {
                 spacing: Style.space(6)
                 width: parent.width
-                PanelSectionHeader {
-                    text: "Squad News"
-                    foreground: root.contentForeground
-                    fontFamily: root.contentFontFamily
+                Item {
+                    width: parent.width
+                    height: Math.max(newsHeader.implicitHeight, newsMeta.implicitHeight)
+                    PanelSectionHeader {
+                        id: newsHeader
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Squad News"
+                        foreground: root.contentForeground
+                        fontFamily: root.contentFontFamily
+                    }
+                    Text {
+                        id: newsMeta
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        textFormat: Text.PlainText
+                        text: Model.squadNewsState(root.tick) === "ready"
+                              ? (Model.squadNews(root.tick).length === 0 ? "clear" : Model.squadNews(root.tick).length + " flags")
+                              : ""
+                        color: root.dimForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.caption
+                    }
                 }
                 Text {
                     visible: Model.squadNewsState(root.tick) === "need-id"
@@ -229,7 +296,7 @@ Panel {
                     model: Model.squadNews(root.tick)
                     delegate: Column {
                         spacing: 2
-                        width: parent.width
+                        width: contentScroll.width
                         Text {
                             textFormat: Text.PlainText
                             text: (modelData.onBench ? "🪑 " : "") + modelData.playerName + " — " + modelData.statusLabel + (modelData.isCaptain ? " (C)" : "") + (modelData.isViceCaptain ? " (V)" : "")
@@ -254,10 +321,29 @@ Panel {
             Column {
                 spacing: Style.space(6)
                 width: parent.width
-                PanelSectionHeader {
-                    text: "Chips"
-                    foreground: root.contentForeground
-                    fontFamily: root.contentFontFamily
+                Item {
+                    width: parent.width
+                    height: Math.max(chipsHeader.implicitHeight, chipsMeta.implicitHeight)
+                    PanelSectionHeader {
+                        id: chipsHeader
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Chips"
+                        foreground: root.contentForeground
+                        fontFamily: root.contentFontFamily
+                    }
+                    Text {
+                        id: chipsMeta
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        textFormat: Text.PlainText
+                        text: Model.chipState(root.tick) === "ready"
+                              ? Model.chipStatus(root.tick).filter(function (c) { return !c.used }).length + " left"
+                              : ""
+                        color: root.dimForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.caption
+                    }
                 }
                 Text {
                     visible: Model.chipState(root.tick) === "need-id"
@@ -275,23 +361,33 @@ Panel {
                     font.family: root.contentFontFamily
                     font.pixelSize: Style.font.body
                 }
-                Text {
-                    visible: Model.chipState(root.tick) === "ready"
-                    textFormat: Text.PlainText
-                    text: Model.chipSummaryText(root.tick)
-                    color: root.contentForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: true
-                }
                 Repeater {
                     model: Model.chipStatus(root.tick)
-                    delegate: Text {
-                        textFormat: Text.PlainText
-                        text: (modelData.used ? "✓ " : "○ ") + modelData.name + (modelData.used && modelData.usedEvent !== null ? " — used GW" + modelData.usedEvent : ": available")
-                        color: modelData.used ? root.dimForeground : root.contentForeground
-                        font.family: root.contentFontFamily
-                        font.pixelSize: Style.font.body
+                    delegate: Item {
+                        width: contentScroll.width
+                        height: Math.max(chipName.implicitHeight, chipState.implicitHeight)
+                        Text {
+                            id: chipName
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            textFormat: Text.PlainText
+                            text: (modelData.used ? "✓ " : "○ ") + modelData.name
+                            color: modelData.used ? root.dimForeground : root.contentForeground
+                            font.family: root.contentFontFamily
+                            font.pixelSize: Style.font.body
+                            font.bold: !modelData.used
+                        }
+                        Text {
+                            id: chipState
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            textFormat: Text.PlainText
+                            text: modelData.used && modelData.usedEvent !== null ? "USED GW" + modelData.usedEvent : "READY"
+                            color: modelData.used ? root.dimForeground : root.contentForeground
+                            font.family: root.contentFontFamily
+                            font.pixelSize: Style.font.caption
+                            font.bold: !modelData.used
+                        }
                     }
                 }
             }
@@ -302,10 +398,29 @@ Panel {
             visible: root.view === "prices"
             spacing: Style.space(6)
             width: parent.width
-            PanelSectionHeader {
-                text: "Price Watch"
-                foreground: root.contentForeground
-                fontFamily: root.contentFontFamily
+            Item {
+                width: parent.width
+                height: Math.max(priceHeader.implicitHeight, priceMeta.implicitHeight)
+                PanelSectionHeader {
+                    id: priceHeader
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Price Watch"
+                    foreground: root.contentForeground
+                    fontFamily: root.contentFontFamily
+                }
+                Text {
+                    id: priceMeta
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    textFormat: Text.PlainText
+                    text: Model.priceWatchState(root.tick) === "ready"
+                          ? Model.priceWatch(root.tick).risers.length + " up · " + Model.priceWatch(root.tick).fallers.length + " down"
+                          : ""
+                    color: root.dimForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                }
             }
             Text {
                 visible: Model.priceWatchState(root.tick) === "loading"
@@ -353,7 +468,7 @@ Panel {
                     font.family: root.contentFontFamily
                     font.pixelSize: Style.font.body
                     wrapMode: Text.WordWrap
-                    width: parent.width
+                    width: contentScroll.width
                 }
             }
             Text {
@@ -374,7 +489,7 @@ Panel {
                     font.family: root.contentFontFamily
                     font.pixelSize: Style.font.body
                     wrapMode: Text.WordWrap
-                    width: parent.width
+                    width: contentScroll.width
                 }
             }
         }
@@ -418,14 +533,31 @@ Panel {
             }
             Repeater {
                 model: Model.consensusCaptains(root.tick)
-                delegate: Text {
-                    textFormat: Text.PlainText
-                    text: modelData.playerName + " — " + modelData.captaincyPct + "% of sample" + (modelData.nextFixture !== "" ? " • " + modelData.nextFixture : "")
-                    color: root.contentForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.body
-                    wrapMode: Text.WordWrap
-                    width: parent.width
+                delegate: Column {
+                    width: contentScroll.width
+                    spacing: 2
+                    Text {
+                        textFormat: Text.PlainText
+                        text: modelData.playerName + " — " + modelData.captaincyPct + "% of sample" + (modelData.nextFixture !== "" ? " • " + modelData.nextFixture : "")
+                        color: root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.body
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+                    Rectangle {
+                        width: parent.width
+                        height: 3
+                        radius: 2
+                        color: root.dimForeground
+                        opacity: 0.3
+                        Rectangle {
+                            width: parent.width * Math.min(1, modelData.captaincyPct / 100)
+                            height: parent.height
+                            radius: 2
+                            color: Color.accent
+                        }
+                    }
                 }
             }
             Text {
@@ -439,14 +571,31 @@ Panel {
             }
             Repeater {
                 model: Model.eliteDifferentialsIn(root.tick)
-                delegate: Text {
-                    textFormat: Text.PlainText
-                    text: modelData.playerName + " — " + modelData.topOwnershipPct + "% top-N vs " + modelData.globalOwnershipPct + "% global"
-                    color: root.contentForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.body
-                    wrapMode: Text.WordWrap
-                    width: parent.width
+                delegate: Column {
+                    width: contentScroll.width
+                    spacing: 2
+                    Text {
+                        textFormat: Text.PlainText
+                        text: modelData.playerName + " — " + modelData.topOwnershipPct + "% top-N vs " + modelData.globalOwnershipPct + "% global"
+                        color: root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.body
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+                    Rectangle {
+                        width: parent.width
+                        height: 3
+                        radius: 2
+                        color: root.dimForeground
+                        opacity: 0.3
+                        Rectangle {
+                            width: parent.width * Math.min(1, modelData.topOwnershipPct / 100)
+                            height: parent.height
+                            radius: 2
+                            color: Color.accent
+                        }
+                    }
                 }
             }
             Text {
@@ -477,7 +626,7 @@ Panel {
                     font.family: root.contentFontFamily
                     font.pixelSize: Style.font.body
                     wrapMode: Text.WordWrap
-                    width: parent.width
+                    width: contentScroll.width
                 }
             }
             Text {
@@ -607,6 +756,28 @@ Panel {
                     font.pixelSize: Style.font.bodySmall
                     anchors.verticalCenter: parent.verticalCenter
                 }
+            }
+            Text {
+                textFormat: Text.PlainText
+                text: "Team ID is the number in your FPL URL: fantasy.premierleague.com/entry/<ID>/… Nothing leaves your machine except public FPL API requests."
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.WordWrap
+                width: parent.width
+            }
+        }
+
+        // --- Footer: manual refresh + official site ---
+        Row {
+            spacing: Style.space(8)
+            Button {
+                text: "Refresh"
+                onClicked: root.refresh()
+            }
+            Button {
+                text: "Open FPL"
+                onClicked: Qt.openUrlExternally(Model.fplUrl(root.tick))
             }
         }
                 }

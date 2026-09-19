@@ -161,6 +161,22 @@ function staleText(_tick) {
 
 function lastError() { return state.lastError }
 
+function hasEntryId(_tick) {
+    return !!state.settings.entryId
+}
+
+// Deep link for the panel footer's "Open FPL" button: the manager's own
+// team page when configured, else the FPL homepage. Click-only, never
+// fetched — the API host stays the sole network contact.
+function fplUrl(_tick) {
+    if (state.settings.entryId) {
+        var gw = displayGameweek()
+        var suffix = gw !== null ? "/event/" + gw : ""
+        return "https://fantasy.premierleague.com/entry/" + state.settings.entryId + suffix
+    }
+    return "https://fantasy.premierleague.com/"
+}
+
 // --- Bootstrap / gameweek helpers (pure, local-only) ---
 
 function _events() {
