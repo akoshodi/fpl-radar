@@ -33,11 +33,12 @@ while a gameweek is actually live.
 
 ## Panel
 
-Tabbed control center — **Team** (gameweek hero card, squad news, chips),
-**Prices** (risers/fallers with meters), **Insights** (captain consensus,
-differentials, trend), plus a **gear page** for settings. Section headers
-carry right-aligned meta (flag counts, chips left, moves). Footer has
-Refresh and an Open FPL button (your team page, click-only).
+Tabbed control center — **Team** (gameweek hero card, lineup safety check,
+season strip, squad news), **Prices** (risers/fallers with meters),
+**Insights** (captain consensus, differentials, trend), **Plan** (transfer
+digest vs the elites, chips, blank/double windows), plus a **gear page**
+for settings. Section headers carry right-aligned meta (flag counts, chips
+left, moves). Footer has Refresh and an Open FPL button (your team page, click-only).
 
 - **Settings** — Team ID, League ID, and top-N sample size, saved back to the widget's `shell.json` entry.
 - **Squad News** — injury/doubt/suspension flags for your 15, with captain/vice/bench markers and chance-of-playing % where FPL reports it. Says "All clear" when there is nothing to flag.
@@ -95,6 +96,9 @@ than retrying in a loop.
 All four roadmap phases are done: bar widget (live points + deadline),
 panel basics (settings, squad news, chips), price watch, and top-manager
 transfer/captain suggestions — see [`docs/ROADMAP.md`](./docs/ROADMAP.md).
+Beyond the roadmap: bench/VC safety check, blank/double planner, transfer
+digest vs elite consensus, and a season points/rank strip (history charts
+need no extra storage — `/history/` already returns the full season).
 Notes for contributors and AI coding agents live in
 [`AGENTS.md`](./AGENTS.md).
 
