@@ -19,9 +19,12 @@ BarWidget {
     // binding re-evaluation (the value never affects results).
     property int tick: 0
 
-    // What the bar pill shows. Reads live Model state so the pill tracks
-    // points/deadline without reopening anything.
-    readonly property string pillText: Model.liveSummaryText(tick) + "  •  " + Model.deadlineText(tick)
+    // What the bar pill shows. Leads with a football glyph (fa-futbol-o,
+    // verified present in the bar's Nerd Font) so the widget reads as an
+    // icon + text, then live Model state so the pill tracks points and
+    // deadline without reopening anything.
+    readonly property string pillIcon: String.fromCharCode(0xF1E3)
+    readonly property string pillText: pillIcon + " " + Model.liveSummaryText(tick) + "  •  " + Model.deadlineText(tick)
     readonly property bool pillLive: Model.isLive(tick)
 
     function refresh() {

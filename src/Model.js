@@ -28,6 +28,7 @@ var state = {
     },
     cache: {
         bootstrapStatic: null,  // { data, fetchedAt }
+        bootstrapStaticPrev: null, // previous snapshot — baseline for price watch
         fixtures: null,         // { data, fetchedAt }
         entry: null,            // { data, fetchedAt, entryId } — entry/{id}/ summary
         entryHistory: null,     // { data, fetchedAt, entryId } — entry/{id}/history/ (chip usage)
@@ -484,13 +485,131 @@ function chipSummaryText() {
     return left.length + " chips left: " + left.join(", ")
 }
 
-// ---- Panel getters (Phase 3 — stub until its phase) ----
+// ---- Panel getters: Price watch (Phase 3) ----
 
+// FPL exposes no "about to rise/fall" flag, so approximate it from
+// consecutive bootstrap snapshots (see DATA_SOURCES.md#derived-data):
+//   - a realised move: now_cost changed between snapshots (units of £0.1m)
+//   - momentum: today's net transfers (in − out) minus yesterday's.
+//     transfers_in/out_event reset every gameweek, so momentum is only
+//     valid when both snapshots sit in the same GW — otherwise null.
+var PRICE_TOP_N = 5
+var PRICE_MOMENTUM_THRESHOLD = 10000  // net transfers/day worth flagging
+
+function _currentEventId(bootstrapData) {
+    var events = (bootstrapData && bootstrapData.events) || []
+    for (var i = 0; i < events.length; i++) {
+        if (events[i].is_current) return events[i].id
+    }
+    return null
+}
+
+// Pure: build { risers, fallers } from two raw bootstrap-static payloads.
+// Row: { playerName, team, cost, costDelta, netTransfers, momentum,
+//   direction ("up"/"down"), note }.
+function computePriceWatch(prevData, currData, options) {
+    options = options || {}
+    var topN = options.topN || PRICE_TOP_N
+    var threshold = options.momentumThreshold || PRICE_MOMENTUM_THRESHOLD
+    if (!prevData || !currData) return { risers: [], fallers: [] }
+
+    var momentumValid = _currentEventId(prevData) !== null &&
+        _currentEventId(prevData) === _currentEventId(currData)
+
+    var teams = {}
+    var currTeams = currData.teams || []
+    for (var t = 0; t < currTeams.length; t++) {
+        if (currTeams[t] && currTeams[t].id !== undefined) teams[currTeams[t].id] = currTeams[t].short_name || ""
+    }
+
+    var prevById = {}
+    var prevElements = prevData.elements || []
+    for (var p = 0; p < prevElements.length; p++) {
+        if (prevElements[p] && prevElements[p].id !== undefined) prevById[prevElements[p].id] = prevElements[p]
+    }
+
+    var risers = []
+    var fallers = []
+    var currElements = currData.elements || []
+    for (var i = 0; i < currElements.length; i++) {
+        var el = currElements[i]
+        if (!el || el.id === undefined) continue
+        var prev = prevById[el.id]
+        if (!prev) continue
+        var costDelta = Number(el.now_cost || 0) - Number(prev.now_cost || 0)
+        var netCurr = Number(el.transfers_in_event || 0) - Number(el.transfers_out_event || 0)
+        var netPrev = Number(prev.transfers_in_event || 0) - Number(prev.transfers_out_event || 0)
+        var momentum = momentumValid ? netCurr - netPrev : null
+        var row = {
+            playerName: el.web_name || ("#" + el.id),
+            team: teams[el.team] || "",
+            cost: formatCost(el.now_cost),
+            costDelta: costDelta,
+            netTransfers: netCurr,
+            momentum: momentum,
+            direction: costDelta > 0 ? "up" : (costDelta < 0 ? "down" : (momentum !== null && momentum >= threshold ? "up" : (momentum !== null && momentum <= -threshold ? "down" : "flat"))),
+            note: ""
+        }
+        row.note = priceNote(row)
+        if (row.direction === "up") risers.push(row)
+        else if (row.direction === "down") fallers.push(row)
+    }
+
+    risers.sort(function (a, b) {
+        if (b.costDelta !== a.costDelta) return b.costDelta - a.costDelta
+        return (b.momentum || 0) - (a.momentum || 0)
+    })
+    fallers.sort(function (a, b) {
+        if (a.costDelta !== b.costDelta) return a.costDelta - b.costDelta
+        return (a.momentum || 0) - (b.momentum || 0)
+    })
+    return { risers: risers.slice(0, topN), fallers: fallers.slice(0, topN) }
+}
+
+// One honest line per row — realised moves first, momentum as "watch".
+function priceNote(row) {
+    var parts = []
+    if (row.costDelta > 0) parts.push("up " + formatCostDelta(row.costDelta) + " overnight")
+    else if (row.costDelta < 0) parts.push("down " + formatCostDelta(row.costDelta) + " overnight")
+    if (row.momentum !== null && Math.abs(row.momentum) >= PRICE_MOMENTUM_THRESHOLD) {
+        parts.push(formatNet(row.momentum) + " net today" +
+            (row.costDelta === 0 ? (row.momentum > 0 ? " — rise watch" : " — fall watch") : ""))
+    } else if (row.costDelta === 0 && row.momentum !== null) {
+        parts.push(formatNet(row.momentum) + " net today")
+    }
+    if (parts.length === 0 && row.momentum === null) parts.push("no baseline momentum (GW rolled over)")
+    return parts.join(", ")
+}
+
+function formatCost(nowCost) {
+    return "\u00A3" + (Number(nowCost || 0) / 10).toFixed(1) + "m"
+}
+
+function formatCostDelta(deltaUnits) {
+    var m = Math.abs(Number(deltaUnits || 0) / 10).toFixed(1)
+    return (deltaUnits < 0 ? "-\u00A3" : "\u00A3") + m + "m"
+}
+
+function formatNet(n) {
+    var sign = n < 0 ? "-" : "+"
+    return sign + (Math.abs(Number(n || 0)) / 1000).toFixed(1) + "k"
+}
+
+// Panel-facing getter: cached snapshots only, never fetches.
 function priceWatch() {
-    // TODO(agent Phase 3): compare today's vs yesterday's cached
-    // bootstrap-static now_cost/transfer deltas.
-    // See docs/DATA_SOURCES.md#derived-data.
-    return []
+    var curr = state.cache.bootstrapStatic
+    var prev = state.cache.bootstrapStaticPrev
+    if (!curr || !curr.data || !prev || !prev.data) return { risers: [], fallers: [] }
+    return computePriceWatch(prev.data, curr.data)
+}
+
+// "ready" (two snapshots — lists may still be legitimately empty),
+// "baseline" (first snapshot only — moves appear after the next refresh),
+// or "loading" (no data yet).
+function priceWatchState() {
+    if (!state.cache.bootstrapStatic || !state.cache.bootstrapStatic.data) return "loading"
+    if (!state.cache.bootstrapStaticPrev || !state.cache.bootstrapStaticPrev.data) return "baseline"
+    return "ready"
 }
 
 // --- Refresh scheduling ---
@@ -545,6 +664,12 @@ function refreshBootstrapIfDue() {
     try {
         Api.fetchBootstrapStatic(
             function (data) {
+                // Rotate: the previous snapshot becomes the baseline for
+                // price watch (Phase 3). Refreshes are TTL-gated (6h), so
+                // the baseline is always hours older, never minutes.
+                if (state.cache.bootstrapStatic && state.cache.bootstrapStatic.data) {
+                    state.cache.bootstrapStaticPrev = state.cache.bootstrapStatic
+                }
                 state.cache.bootstrapStatic = { data: data, fetchedAt: _now() }
                 state.lastError = null
                 persist()

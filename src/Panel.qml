@@ -355,7 +355,7 @@ Panel {
             }
         }
 
-        // --- Price watch (Phase 3 — placeholder, not blank) ---
+        // --- Price watch (Phase 3) ---
         Column {
             spacing: Style.space(6)
                     width: parent.width
@@ -365,13 +365,74 @@ Panel {
                 fontFamily: root.contentFontFamily
             }
             Text {
+                visible: Model.priceWatchState() === "loading"
                 textFormat: Text.PlainText
-                text: "Coming in Phase 3 — day-over-day price/transfer tracking."
+                text: "Loading prices…"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+            }
+            Text {
+                visible: Model.priceWatchState() === "baseline"
+                textFormat: Text.PlainText
+                text: "Collecting baseline — price moves appear after the next data refresh."
                 color: root.dimForeground
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.body
                 wrapMode: Text.WordWrap
                 width: parent.width
+            }
+            Text {
+                visible: Model.priceWatchState() === "ready" && Model.priceWatch().risers.length === 0 && Model.priceWatch().fallers.length === 0
+                textFormat: Text.PlainText
+                text: "No notable price moves since yesterday."
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: Text.WordWrap
+                width: parent.width
+            }
+            Text {
+                visible: Model.priceWatch().risers.length > 0
+                textFormat: Text.PlainText
+                text: "Rising"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+            }
+            Repeater {
+                model: Model.priceWatch().risers
+                delegate: Text {
+                    textFormat: Text.PlainText
+                    text: "▲ " + modelData.playerName + (modelData.team !== "" ? " (" + modelData.team + ")" : "") + " " + modelData.cost + " — " + modelData.note
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
+                    width: parent.width
+                }
+            }
+            Text {
+                visible: Model.priceWatch().fallers.length > 0
+                textFormat: Text.PlainText
+                text: "Falling"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+            }
+            Repeater {
+                model: Model.priceWatch().fallers
+                delegate: Text {
+                    textFormat: Text.PlainText
+                    text: "▼ " + modelData.playerName + (modelData.team !== "" ? " (" + modelData.team + ")" : "") + " " + modelData.cost + " — " + modelData.note
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
+                    width: parent.width
+                }
             }
         }
 
