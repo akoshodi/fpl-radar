@@ -1,6 +1,8 @@
 .pragma library
 .import "lib/FplApi.js" as Api
 .import "lib/TopManagerAnalysis.js" as Analysis
+.import "lib/LineupCheck.js" as Lineup
+.import "lib/FixturePlanner.js" as Planner
 
 // Single source of truth for both BarWidget.qml and Panel.qml.
 // Owns timers/refresh scheduling and exposes plain getters the QML
@@ -32,6 +34,7 @@ var state = {
         fixtures: null,         // { data, fetchedAt }
         entry: null,            // { data, fetchedAt, entryId } — entry/{id}/ summary
         entryHistory: null,     // { data, fetchedAt, entryId } — entry/{id}/history/ (chip usage)
+        entryTransfers: null,   // { data, fetchedAt, entryId } — entry/{id}/transfers/
         ownPicks: null,         // { data, fetchedAt, gameweek, entryId }
         liveEvent: null,        // { data, fetchedAt, gameweek }
         topManagerAnalysis: null // { data, fetchedAt, gameweek, sampleSize }
@@ -119,6 +122,7 @@ function setEntryId(entryId) {
     state.cache.liveEvent = null
     state.cache.entry = null
     state.cache.entryHistory = null
+    state.cache.entryTransfers = null
     persist()
 }
 
@@ -438,6 +442,170 @@ function squadNewsState() {
     return "ready"
 }
 
+// ---- Panel getters: Lineup check (bench/VC safety) ----
+
+function lineupCheck() {
+    var bs = state.cache.bootstrapStatic
+    var op = state.cache.ownPicks
+    if (!bs || !bs.data || !op || !op.data) {
+        return { captain: null, vice: null, risks: [], allClear: true }
+    }
+    var fx = state.cache.fixtures && state.cache.fixtures.data ? state.cache.fixtures.data : null
+    return Lineup.computeLineupCheck(op.data, bs.data, fx, op.gameweek)
+}
+
+function lineupState() {
+    if (!state.settings.entryId) return "need-id"
+    if (!state.cache.bootstrapStatic || !state.cache.bootstrapStatic.data) return "loading"
+    if (!state.cache.ownPicks || !state.cache.ownPicks.data) return "loading"
+    return "ready"
+}
+
+// ---- Panel getters: Transfer digest (your GW transfers vs elites) ----
+
+function needsEntryTransfersRefresh() {
+    if (!state.settings.entryId) return false
+    var tr = state.cache.entryTransfers
+    if (!tr || !tr.data) return true
+    if (tr.entryId !== state.settings.entryId) return true
+    return !_isFresh(tr, TTL_MS.entry)
+}
+
+function refreshEntryTransfersIfDue() {
+    if (!needsEntryTransfersRefresh()) return
+    var entryId = state.settings.entryId
+    try {
+        Api.fetchTransfers(
+            entryId,
+            function (data) {
+                state.cache.entryTransfers = { data: data, fetchedAt: _now(), entryId: entryId }
+                state.lastError = null
+                persist()
+            },
+            function (err) {
+                state.lastError = String(err)
+                persist()
+            }
+        )
+    } catch (e) {
+        state.lastError = String(e)
+    }
+}
+
+function transferDigest() {
+    var empty = { event: displayGameweek(), moves: [] }
+    var tr = state.cache.entryTransfers
+    var bs = state.cache.bootstrapStatic
+    if (!tr || !tr.data || !bs || !bs.data) return empty
+    var gw = displayGameweek()
+    if (gw === null) return empty
+    var elements = bs.data.elements || []
+    var playerById = {}
+    for (var i = 0; i < elements.length; i++) {
+        if (elements[i] && elements[i].id !== undefined) {
+            playerById[elements[i].id] = { name: elements[i].web_name }
+        }
+    }
+    var eliteByElement = null
+    var a = state.cache.topManagerAnalysis
+    if (a && a.data && a.data.differentials) {
+        eliteByElement = {}
+        for (var d = 0; d < a.data.differentials.length; d++) {
+            eliteByElement[a.data.differentials[d].element] = a.data.differentials[d].topOwnershipPct
+        }
+    }
+    return Analysis.computeTransferDigest(tr.data, gw, playerById, eliteByElement)
+}
+
+function transferDigestState() {
+    if (!state.settings.entryId) return "need-id"
+    if (!state.cache.entryTransfers || !state.cache.entryTransfers.data) return "loading"
+    if (!state.cache.bootstrapStatic || !state.cache.bootstrapStatic.data) return "loading"
+    return "ready"
+}
+
+// ---- Panel getters: Season history (points sparkline + rank) ----
+// The /history/ payload already carries the full season (current[]), so
+// no LocalStorage accumulation is needed — see ARCHITECTURE.md.
+
+function _seasonCurrent() {
+    var eh = state.cache.entryHistory
+    if (!eh || !eh.data || !eh.data.current) return null
+    return eh.data.current
+}
+
+function seasonState() {
+    if (!state.settings.entryId) return "need-id"
+    if (!_seasonCurrent()) return "loading"
+    return "ready"
+}
+
+function seasonPoints() {
+    var cur = _seasonCurrent()
+    if (!cur) return []
+    var pts = []
+    for (var i = 0; i < cur.length; i++) {
+        if (cur[i] && typeof cur[i].points === "number") pts.push(cur[i].points)
+    }
+    return pts
+}
+
+function seasonRanks() {
+    var cur = _seasonCurrent()
+    if (!cur) return []
+    var ranks = []
+    for (var j = 0; j < cur.length; j++) {
+        if (cur[j] && typeof cur[j].rank === "number") ranks.push(cur[j].rank)
+    }
+    return ranks
+}
+
+function seasonBest() {
+    var pts = seasonPoints()
+    if (pts.length === 0) return null
+    var best = pts[0]
+    var gw = 1
+    for (var i = 1; i < pts.length; i++) {
+        if (pts[i] > best) { best = pts[i]; gw = i + 1 }
+    }
+    return { points: best, gw: gw }
+}
+
+function seasonRankLine() {
+    var ranks = seasonRanks()
+    if (ranks.length === 0) return ""
+    var first = ranks[0]
+    var last = ranks[ranks.length - 1]
+    var move = first - last  // positive = climbed
+    var arrow = move > 0 ? "▲ " : (move < 0 ? "▼ " : "– ")
+    return "Rank " + _fmtInt(last) + " (" + arrow + _fmtInt(Math.abs(move)) + " since GW1)"
+}
+
+function _fmtInt(n) {
+    var s = String(Math.abs(Math.round(Number(n) || 0)))
+    var out = ""
+    while (s.length > 3) {
+        out = "," + s.slice(-3) + out
+        s = s.slice(0, -3)
+    }
+    return s + out
+}
+
+// ---- Panel getters: Blank/double planner ----
+
+function fixturePlan() {
+    var fx = state.cache.fixtures && state.cache.fixtures.data ? state.cache.fixtures.data : null
+    var bs = state.cache.bootstrapStatic && state.cache.bootstrapStatic.data ? state.cache.bootstrapStatic.data : null
+    if (!fx || !bs) return []
+    return Planner.blankDoubleWindows(fx, bs, displayGameweek(), 6)
+}
+
+function fixturePlanState() {
+    if (!state.cache.bootstrapStatic || !state.cache.bootstrapStatic.data) return "loading"
+    if (!state.cache.fixtures || !state.cache.fixtures.data) return "loading"
+    return "ready"
+}
+
 // ---- Panel getters: Chip tracker (Phase 2) ----
 
 // Canonical chip names as the FPL API spells them in history.chips.
@@ -674,6 +842,7 @@ function refreshAll() {
     refreshOwnPicksIfDue()
     refreshLiveIfDue()
     refreshEntryHistoryIfDue()
+    refreshEntryTransfersIfDue()
     refreshFixturesIfDue()
     refreshTopManagerAnalysis()
 }
