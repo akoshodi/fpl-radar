@@ -82,10 +82,11 @@ than retrying in a loop.
 
 ## Status
 
-Phases 1 (bar widget), 2 (settings, squad news, chips), and 3 (price watch)
-are done. Next: Phase 4 top-manager analysis — see
-[`docs/ROADMAP.md`](./docs/ROADMAP.md). Notes for contributors and AI
-coding agents live in [`AGENTS.md`](./AGENTS.md).
+All four roadmap phases are done: bar widget (live points + deadline),
+panel basics (settings, squad news, chips), price watch, and top-manager
+transfer/captain suggestions — see [`docs/ROADMAP.md`](./docs/ROADMAP.md).
+Notes for contributors and AI coding agents live in
+[`AGENTS.md`](./AGENTS.md).
 
 ## License
 

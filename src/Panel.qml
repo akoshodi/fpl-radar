@@ -436,7 +436,9 @@ Panel {
             }
         }
 
-        // --- Top Manager Insights (Phase 4 — placeholder, not blank) ---
+        // --- Top Manager Insights (Phase 4): what the sampled elites are
+        //      doing — descriptive signal ("top managers are favouring…"),
+        //      never directives. N + gameweek shown so the weight is clear.
         Column {
             spacing: Style.space(6)
                     width: parent.width
@@ -446,13 +448,132 @@ Panel {
                 fontFamily: root.contentFontFamily
             }
             Text {
+                visible: Model.topManagerState() === "loading"
                 textFormat: Text.PlainText
-                text: "Coming in Phase 4 — captaincy consensus and elite differentials from top managers."
+                text: "Sampling top managers… (once daily, slowest on first run)"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+            }
+            Text {
+                visible: Model.analysisNote() !== ""
+                textFormat: Text.PlainText
+                text: Model.analysisNote()
+                color: root.urgentColor
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+            }
+            Text {
+                visible: Model.topManagerState() === "ready" && Model.consensusCaptains().length > 0
+                textFormat: Text.PlainText
+                text: "Top managers are favouring as captain:"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+            }
+            Repeater {
+                model: Model.consensusCaptains()
+                delegate: Text {
+                    textFormat: Text.PlainText
+                    text: modelData.playerName + " — " + modelData.captaincyPct + "% of sample" + (modelData.nextFixture !== "" ? " • " + modelData.nextFixture : "")
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
+                    width: parent.width
+                }
+            }
+            Text {
+                visible: Model.eliteDifferentialsIn().length > 0
+                textFormat: Text.PlainText
+                text: "Elites own these far above the public (transfer-in candidates):"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+            }
+            Repeater {
+                model: Model.eliteDifferentialsIn()
+                delegate: Text {
+                    textFormat: Text.PlainText
+                    text: modelData.playerName + " — " + modelData.topOwnershipPct + "% top-N vs " + modelData.globalOwnershipPct + "% global"
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
+                    width: parent.width
+                }
+            }
+            Text {
+                visible: Model.topManagerState() === "ready" && !Model.hasOwnSquad()
+                textFormat: Text.PlainText
+                text: "Set your Team ID above to see which of your players the elites are fading."
                 color: root.dimForeground
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.body
                 wrapMode: Text.WordWrap
                 width: parent.width
+            }
+            Text {
+                visible: Model.hasOwnSquad() && Model.eliteDifferentialsOut().length > 0
+                textFormat: Text.PlainText
+                text: "Elites are fading these that you own (transfer-out candidates):"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+            }
+            Repeater {
+                model: Model.eliteDifferentialsOut()
+                delegate: Text {
+                    textFormat: Text.PlainText
+                    text: modelData.playerName + " — " + modelData.topOwnershipPct + "% top-N vs " + modelData.globalOwnershipPct + "% global"
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: Text.WordWrap
+                    width: parent.width
+                }
+            }
+            Text {
+                visible: Model.hasOwnSquad() && Model.topManagerState() === "ready" && Model.eliteDifferentialsOut().length === 0
+                textFormat: Text.PlainText
+                text: "None of your players are being faded by the elites."
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: Text.WordWrap
+                width: parent.width
+            }
+            Text {
+                visible: Model.trendRowsIn().length > 0 || Model.trendRowsOut().length > 0
+                textFormat: Text.PlainText
+                text: "Week-over-week among elites (soft signal):"
+                color: root.dimForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+            }
+            Repeater {
+                model: Model.trendRowsIn()
+                delegate: Text {
+                    textFormat: Text.PlainText
+                    text: "▲ " + modelData.playerName + " (+" + modelData.delta + " squads, " + modelData.currPct + "%)"
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                }
+            }
+            Repeater {
+                model: Model.trendRowsOut()
+                delegate: Text {
+                    textFormat: Text.PlainText
+                    text: "▼ " + modelData.playerName + " (" + modelData.delta + " squads, " + modelData.currPct + "%)"
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                }
             }
         }
                 }
