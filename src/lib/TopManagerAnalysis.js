@@ -94,6 +94,50 @@ function computeTrend(prevPicksByManager, currPicksByManager, playerById, teamsB
     return { in: trendingIn, out: trendingOut }
 }
 
+// Transfer digest: your gameweek transfers judged against the elite
+// sample. transfersData is the raw /entry/{id}/transfers/ array
+// ([{event, element_in, element_out, ...}]); eliteByElement maps element
+// id -> top-N ownership % (null when the sample isn't ready yet).
+// Thresholds are heuristics, surfaced raw in the copy so they stay honest.
+// Returns { event: gw, moves: [{ inName, outName, verdictIn, verdictOut }] }.
+var DIGEST_AHEAD_PCT = 40
+var DIGEST_FRINGE_PCT = 10
+
+function computeTransferDigest(transfersData, gw, playerById, eliteByElement) {
+    var moves = []
+    var list = transfersData || []
+    for (var i = 0; i < list.length; i++) {
+        var t = list[i]
+        if (!t || t.event !== gw) continue
+        var inName = _pickName(playerById, t.element_in)
+        var outName = _pickName(playerById, t.element_out)
+        moves.push({
+            inName: inName,
+            outName: outName,
+            verdictIn: _digestVerdict(true, eliteByElement ? eliteByElement[t.element_in] : null),
+            verdictOut: _digestVerdict(false, eliteByElement ? eliteByElement[t.element_out] : null)
+        })
+    }
+    return { event: gw, moves: moves }
+}
+
+function _pickName(playerById, element) {
+    var p = (playerById || {})[element]
+    return (p && p.name) || ("#" + element)
+}
+
+function _digestVerdict(isBuy, topPct) {
+    if (topPct === null || topPct === undefined) return "elite sample pending"
+    var pct = Math.round(topPct * 10) / 10
+    if (isBuy) {
+        if (topPct >= DIGEST_AHEAD_PCT) return "ahead of the curve — " + pct + "% of sampled elites own him"
+        if (topPct <= DIGEST_FRINGE_PCT) return "against consensus — only " + pct + "% of sampled elites own him"
+        return pct + "% of sampled elites own him"
+    }
+    if (topPct >= DIGEST_AHEAD_PCT) return "against consensus — elites still own him at " + pct + "%"
+    return "elites agree — only " + pct + "% still own him"
+}
+
 // Next UNPLAYED fixture for a team at/after fromGw: "vs ARS (H)".
 // Empty string when unknown — callers render it as absent, never as data.
 function nextFixtureForTeam(fixtures, teamId, fromGw, teamsById) {
