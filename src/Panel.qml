@@ -311,7 +311,7 @@ Panel {
                     }
                 }
                 Text {
-                    visible: Model.seasonState(root.tick) === "ready" && Model.seasonBest(root.tick) !== null
+                    visible: Model.seasonState(root.tick) === "ready" && Model.seasonPoints(root.tick).length > 0
                     textFormat: Text.PlainText
                     text: "Best: " + Model.seasonBest(root.tick).points + " pts (GW" + Model.seasonBest(root.tick).gw + ")"
                     color: root.dimForeground

@@ -451,7 +451,12 @@ function lineupCheck() {
         return { captain: null, vice: null, risks: [], allClear: true }
     }
     var fx = state.cache.fixtures && state.cache.fixtures.data ? state.cache.fixtures.data : null
-    return Lineup.computeLineupCheck(op.data, bs.data, fx, op.gameweek)
+    var r = Lineup.computeLineupCheck(op.data, bs.data, fx, op.gameweek)
+    // QML evaluates text bindings even when invisible — never hand back
+    // null heads; the panel tests .risk instead.
+    if (!r.captain) r.captain = { playerName: "—", risk: false, note: "not set" }
+    if (!r.vice) r.vice = { playerName: "—", risk: false, note: "not set" }
+    return r
 }
 
 function lineupState() {
